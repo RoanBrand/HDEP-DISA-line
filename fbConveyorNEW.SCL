@@ -1,0 +1,537 @@
+FUNCTION_BLOCK fcConveyorLIMIT
+TITLE = 'Normal Conveyor with mechanical limit switch as product sensor'
+VERSION : '1.0'
+KNOW_HOW_PROTECT
+AUTHOR : 'RF Brand'
+//********************************************************************************************//
+VAR_INPUT
+(* Physical Inputs *)
+    iButton_Index : BOOL;   // Button used to initiate product transport (Green)
+    iButton_Aux : BOOL; // Alternative Function Button (Red)
+    iButton_EStop : BOOL; // Local EStop button
+    iEStop_Global : BOOL;   // EStop Condition due to safety system.
+    iPS : BOOL;  // Mechanical limit switch
+    iVSD_Rollers_Ready : BOOL;  // VSD Health Signals
+    iClock : BOOL;  // Clock pulse signal used for flickering indications
+    
+(* Inter-Conveyor Messages *)                                           //      2     ^
+    iNeigh_1 : INT; // Def as prev conv that this conv receives from.   //      |     |
+    iNeigh_2 : INT; // Def as next conv to send to from this conv.      //   3-[C]-4  ^
+                                                                        //      |     |
+(* Message Codes and Meaning *)                                         //      1     ^
+    //  0-  Nothing
+    //  1-  This conveyor is ready to receive a product.
+    //  2-  Ask previous conveyor to send its product.
+    //  3-  Request to send a product to the next conveyor.
+    //  4-  This product is not longer detected while sending it.
+    //  5-  Conveyor is currently sending a product.
+    //  6-  Conveyor has received a product.
+    //  7-  Conveyor has received a product too early. (Sensor activated prematurely)
+    //  9-  Cancel any product transaction with a neighbour conveyor.
+    //  10- Conveyor experienced an Emergency stop condition.
+    
+(* HMI *)
+    iManual_Mode_Req : BOOL;    // User Request Manual Control of conveyor on HMI
+    
+(* Settings *)
+    xConv_Behav : INT;  (* SPECIFY CONVEYOR BEHAVIOUR: *)
+                        // 0-Basic 'Push to Go' Conveyor;
+                        // 1-Automatic Pass on Product without user (Experimental and not used)
+                        // 2-CycleMode
+                        
+    xSensor_offDelay : TIME := t#1000ms; // Off-Delay time required by the sensor
+    xWorker_Absent : BOOL;  // No 'ready button' has to be pressed every cycle for this conv (During cycle mode)
+    //xCycle_Running : BOOL; // Are the fettlers busy? (During cycle mode)
+    xSegment_Startpoint : BOOL;
+END_VAR
+VAR_OUTPUT
+(* Physical Outputs *)
+    oMotor_Rollers_Fwd : BOOL;  // Standard Conveyor Rollers
+    oMotor_Rollers_Rev : BOOL;
+    oLamp_Indication : BOOL;    // Status lights
+    oLamp_Warning : BOOL;
+    oLamp_Fault : BOOL;
+    
+(* Inter-Conveyor Messages *)
+    oNeigh_1 : INT;
+    oNeigh_2 : INT;
+    
+(* Alarms *)
+    oAlarmsOut : WORD;
+    oAlarms AT oAlarmsOut : ARRAY[0..15] OF BOOL;
+//  oAlarms[0]  ->  "Cancel Receive Process: Prev Conv not Sending"
+//  oAlarms[1]  ->  "Momentary Obstruction: Photosensor broken and remade too fast"
+//  oAlarms[2]  ->  "Receive Timeout: "Product stuck on Conveyor"
+//  oAlarms[3]  ->  "Obstruction on next Conv while Sending"
+END_VAR
+VAR
+    oldState : INT;         (* FINITE STATE MACHINE FOR CONVEYOR*)
+    State : INT;    //  0-RESET;                1-ABLETORECEIVE;            
+                    //  2-RECEIVING;            4-STANDBY;
+                    //  8-ABLETOSEND;          11-SENDING;   
+                    // 13-RECEIVEWHILESENDING; 14-MANUALMODE:
+                    // 15-ESTOP;               19-VSDFAULT;
+                      
+    internalState : INT;    // Sub Statemachine used in some states
+    
+    tTimer : SFB4; // IEC On-Delay timers used for timing sequences
+    tPS_Debounce : SFB5;    // IEC Off-Delay Timer used for debouncing product sensor
+    bLocal_Emergency : BOOL;    // Local EStop button was pressed
+    bNeighbour_Emergency : BOOL;    // Neighbour EStop button was pressed
+    
+(* Check if product sensor activated and released in short time *)
+    Momentary_obstruction : BOOL; // This can happen due to misaligned sensor or human hand
+    tMomentary : SFB4; // Used to make alarm
+    
+(* Manual Mode Button Control *)
+    bManual_Field_Buttons : BOOL;
+    bManual_HMI_Fwd : BOOL;
+    bManual_HMI_Rev : BOOL;
+    bOld_Fwd : BOOL;
+    bOld_Rev : BOOL;
+    
+(* CycleMode VARs *)
+    bReady_to_Part : BOOL;
+END_VAR
+BEGIN
+(* Sensors *)
+tPS_Debounce(IN := iPS, PT := xSensor_offDelay);  // Product sensor debounce
+        
+(* Machine Control Flow *)
+IF iEStop_Global AND NOT (State = 15) THEN          // Emergency stop gets top priority in program
+    bLocal_Emergency := false;
+    bNeighbour_Emergency := false;
+    State := 15;    // Goto ESTOP
+ELSIF NOT iVSD_Rollers_Ready THEN                   // After that VSD Failure
+    State := 19;
+ELSIF iManual_Mode_Req AND NOT (State = 14) THEN    // After that manual operation requests
+    State := 14;
+END_IF;
+
+CASE State OF
+    0 : // STATE 0 - RESET
+        IF oldState <> State THEN
+            tTimer(IN := false);
+            bReady_to_Part := false;
+            oNeigh_1 := 0;
+            oNeigh_2 := 0;
+            oAlarmsOut := w#16#0; // 0x0000;
+            oMotor_Rollers_Fwd := false;
+            oMotor_Rollers_Rev := false;
+            oLamp_Indication := false;
+            oLamp_Warning := false;
+            oLamp_Fault := false;
+            oldState := State;
+        END_IF;
+        IF tPS_Debounce.Q THEN  // Detect product
+            State := 4; // GOTO STANDBY
+        ELSE
+            State := 1; // GOTO ABLETORECEIVE
+        END_IF;
+        ;
+    1 : // STATE 1 - ABLETORECEIVE
+        IF oldState <> State THEN
+            oNeigh_1 := 1;
+            oLamp_Indication := true;
+        oldState := State;
+        END_IF;
+        
+        IF (iNeigh_1 = 3) THEN
+            State := 2; // GOTO RECEIVING
+        ELSIF tPS_Debounce.Q THEN
+            State := 4; // GOTO STANDBY
+        ELSIF xConv_Behav = 2 THEN
+            IF (iButton_Index OR xWorker_Absent) THEN
+                bReady_to_Part := true;
+            END_IF;
+            oLamp_Warning := NOT bReady_to_Part;
+        ELSIF xConv_Behav <> 2 THEN
+            bReady_to_Part := false;
+            oLamp_Warning := false;
+        END_IF;
+        
+        IF oldState <> State THEN
+            oNeigh_1 := 0;
+            bReady_to_Part := false;
+            oLamp_Indication := false;
+            oLamp_Warning := false;
+        END_IF;
+        ;
+    2 : // STATE 2 - RECEIVING
+        IF oldState <> State THEN
+            tTimer(IN := false);
+            internalState := 0;
+            oNeigh_1 := 2;
+            oMotor_Rollers_Fwd := true;
+            oLamp_Warning := true;
+        oldState := State;
+        END_IF;
+        CASE internalState OF
+            0 : tTimer(IN := true, PT := t#1s);
+                IF tTimer.Q THEN                    // Prev conv did not send
+                    tTimer(IN := false);
+                    oNeigh_1 := 9;          // Cancel operation
+                    oAlarms[0] := true;     // Generate HMI Alarm 1
+                    oMotor_Rollers_Fwd := false;
+                    internalState := 10;
+                ELSIF iNeigh_1 = 5 THEN             // Prev conv is sending
+                    tTimer(IN := false);
+                    oNeigh_1 := 0;          
+                    internalState := 1;
+                END_IF;
+                ;
+            1 : IF tPS_Debounce.Q THEN              // Sensor set too early
+                    oNeigh_1 := 7;          // Tell prev conv product arrived too early
+                    oMotor_Rollers_Fwd := false;
+                    internalState := 11;
+                ELSIF iNeigh_1 = 4 THEN             // Prev conv is done
+                    internalState := 2;
+                END_IF;
+                ;
+            2 : tTimer(IN := true, PT := t#10s);
+                IF tTimer.Q THEN                    // Product failed to arrive
+                    tTimer(IN := false);
+                    oAlarms[2] := true;     // Generate HMI Alarm 3
+                    oMotor_Rollers_Fwd := false;
+                    internalState := 10;
+                ELSIF tPS_Debounce.Q THEN           // Product has arrived
+                    tTimer(IN := false);
+                    oNeigh_1 := 6;
+                    oMotor_Rollers_Fwd := false;
+                    internalState := 3;
+                END_IF;
+                ;
+            3 : tTimer(IN := true, PT := t#550ms);
+                IF NOT iPS THEN                     // Suspect obstruction
+                    Momentary_obstruction := true;
+                    State := 4; // GOTO STANDBY
+                ELSIF tTimer.Q THEN                 // Assume product has arrived
+                    State := 8; // GOTO ABLETOSEND
+                END_IF;
+                ;
+           10 : tTimer(IN := true, PT := t#2s); // Wait
+                IF tTimer.Q THEN
+                    State := 4; // GOTO STANDBY
+                END_IF;
+                ;
+           11 : tTimer(IN := true, PT := t#550ms);  // Early Receive. Error by Prev Conv.
+                IF NOT iPS THEN
+                    Momentary_obstruction := true;
+                    State := 4; // GOTO STANDBY
+                ELSIF tTimer.Q THEN
+                    State := 4; // GOTO STANDBY
+                END_IF;
+                ;
+        END_CASE;
+        IF iNeigh_1 = 9 THEN
+            State := 4;
+        END_IF;
+        IF oldState <> State THEN
+            oNeigh_1 := 0;
+            oAlarms[0] := false;
+            oAlarms[2] := false;
+            oMotor_Rollers_Fwd := false;
+            oLamp_Warning := false;
+        END_IF;
+        ;
+    4 : // STANDBY
+        IF oldState <> State THEN
+            internalState := 0;
+            oLamp_Warning := true;
+        oldState := State;
+        END_IF;
+        CASE internalState OF
+            0 : IF iButton_Index THEN
+                    internalState := 1;
+                END_IF;
+                ;
+            1 : IF NOT iButton_Index THEN   // Want to make sure button is released
+                    IF tPS_Debounce.Q THEN
+                        State := 8; // GOTO ABLETOSEND
+                    ELSE
+                        State := 1; // GOTO ABLETORECEIVE
+                    END_IF;
+                END_IF;
+                ;
+        END_CASE;
+        IF oldState <> State THEN
+            oLamp_Warning := false;
+        END_IF;
+        ;
+    8 : // ABLETOSEND
+        IF oldState <> State THEN
+            internalState := 0;
+            oLamp_Indication := true;
+        oldState := State;
+        END_IF;
+        CASE xConv_Behav OF
+            0 : IF iButton_Index AND iNeigh_2 = 1 AND internalState = 0 THEN
+                    internalState := 1;
+                END_IF;
+                ;
+            1 : IF iNeigh_2 = 1 AND internalState = 0 THEN
+                    internalState := 2;
+                END_IF;
+                ;
+            2 : IF iNeigh_1 = 3 AND NOT xSegment_Startpoint THEN
+                    internalState := 2;
+                ELSIF iButton_Index OR xWorker_Absent THEN
+                    bReady_to_Part := true;
+                    oLamp_Warning := NOT bReady_to_Part;
+                END_IF;
+                ;
+        END_CASE;
+        IF xConv_Behav <> 2 THEN
+            bReady_to_Part := false;
+            oLamp_Warning := false;
+        END_IF;
+        
+        CASE internalState OF
+            0 : oNeigh_2 := 0;
+                ;
+            1 : IF NOT iButton_Index THEN
+                    internalState := 2;
+                END_IF;
+                ;
+            2 : tTimer(IN := true, PT := t#1s);
+                oNeigh_2 := 3;
+                IF tTimer.Q THEN
+                    tTimer(IN := false);
+                    internalState := 0;
+                ELSIF iNeigh_2 = 2 THEN
+                    IF xConv_Behav = 2 THEN
+                        State := 13;
+                    ELSE
+                        State := 11;
+                    END_IF;
+                END_IF;
+                ;
+        END_CASE; 
+        
+        IF NOT tPS_Debounce.Q THEN
+            State := 1;
+        END_IF;
+        
+        IF oldState <> State THEN
+            bReady_to_Part := false;
+            oLamp_Indication := false;
+            oLamp_Warning := false;
+        END_IF;
+        ;
+   11 : // SENDING PRODUCT
+        IF oldState <> State THEN
+            tTimer(IN := false);
+            internalState := 0;
+            IF (xConv_Behav = 1) THEN
+                oNeigh_1 := 1;
+            END_IF;
+            oNeigh_2 := 5;
+            oMotor_Rollers_Fwd := true;
+            oLamp_Warning := true;
+        oldState := State;
+        END_IF;
+        CASE internalState OF
+            0 : tTimer(IN := true, PT := t#10s);
+                IF tTimer.Q THEN                // Product not leaving
+                    tTimer(IN := false);
+                    oMotor_Rollers_Fwd := false;
+                    internalState := 2;
+                ELSIF iNeigh_2 = 7 THEN         // Next Conv reports obstruction
+                    tTimer(IN := false);
+                    internalState := 10;
+                ELSIF NOT tPS_Debounce.Q THEN     // Product has left the Conv
+                    tTimer(IN := false);
+                    oNeigh_2 := 4;
+                    internalState := 1;
+                END_IF;
+                ;
+            1 : tTimer(IN := true, PT := t#3s); // Keep on to clear product
+                IF tTimer.Q OR iNeigh_2 = 6 THEN
+                    State := 1; // GOTO ABLETORECEIVE
+                END_IF;
+                ;
+            2 : tTimer(IN := true, PT := t#5s);
+                IF tTimer.Q THEN
+                    tTimer(IN := false);
+                    internalState := 12;
+                ELSIF NOT tPS_Debounce.Q THEN
+                    oNeigh_2 := 4;
+                    internalState := 1;
+                ELSIF iNeigh_2 = 7 THEN         // Next Conv reports obstruction
+                    tTimer(IN := false);
+                    internalState := 10;
+                END_IF;
+                ;   
+           10 : tTimer(IN := true, PT := t#2s);
+                oMotor_Rollers_Fwd := false;
+                oAlarms[3] := true;
+                IF tTimer.Q THEN
+                    State := 4;
+                END_IF;
+                ;
+           12 : tTimer(IN := true, PT := t#2s);
+                oNeigh_2 := 9;
+                oAlarms[4] := true;
+                IF tTimer.Q THEN
+                    State := 4;
+                END_IF;
+                ;
+        END_CASE;
+        IF oldState <> State THEN
+            oNeigh_1 := 0;
+            oNeigh_2 := 0;
+            oMotor_Rollers_Fwd := false;
+            oLamp_Warning := false;
+        END_IF;
+        ;
+   13 : // RECEIVEWHILESENDING
+        IF oldState <> State THEN
+            tTimer(IN := false);
+            internalState := 0;
+            oNeigh_1 := 2;
+            oNeigh_2 := 5;
+            oMotor_Rollers_Fwd := true;
+            oLamp_Warning := true;
+            oldState := State;
+        END_IF;
+        
+        
+   (*
+   13 : // RECEIVE WHILE SENDING
+        IF oldState <> State THEN
+            oNeigh_1 := 2;
+            oNeigh_2 := 5;
+            oMotor_Rollers_Fwd := true;
+            oLamp_Warning := true;
+        oldState := State;
+        END_IF;
+    
+        IF NOT tPS_Debounce.Q THEN
+            State := 52;
+        ELSIF iNeigh_1 = 5 THEN
+            oNeigh_1 := 0;
+        ELSIF (oNeigh_1 = 10) OR (oNeigh_2 = 10) THEN
+            State := 0;
+        END_IF;
+    
+        IF oldState <> State THEN
+            oNeigh_1 := 0;
+            oNeigh_2 := 0;
+            oMotor_Rollers_Fwd := false;
+            oLamp_Warning := false;
+        END_IF;
+        ;
+   *)
+   14 : // MANUAL MODE
+        IF oldState <> State THEN
+            oNeigh_1 := 0;
+            oNeigh_2 := 0;
+            bManual_Field_Buttons := false;
+            bManual_HMI_Fwd := false;
+            bManual_HMI_Rev := false;
+            bOld_Fwd := false;
+            bOld_Rev := false;
+            oMotor_Rollers_Fwd := false;
+            oMotor_Rollers_Rev := false;
+            oLamp_Indication := true;
+            oLamp_Warning := false;
+            oLamp_Fault := true;
+            oldState := State;
+        END_IF;
+        IF NOT (iButton_Index OR iButton_Aux) THEN  // Require that both buttons be released,
+            bManual_Field_Buttons := true;          // before we start anything
+        END_IF;
+        IF oMotor_Rollers_Fwd AND NOT bOld_Fwd THEN // Rollers FWD from HMI
+            bManual_HMI_Fwd := true;
+        ELSIF bOld_Fwd AND NOT oMotor_Rollers_Fwd THEN
+            bManual_HMI_Fwd := false;
+        END_IF;
+        IF oMotor_Rollers_Rev AND NOT bOld_Rev THEN // Rollers REV from HMI
+            bManual_HMI_Rev := true;
+        ELSIF bOld_Rev AND NOT oMotor_Rollers_Rev THEN
+            bManual_HMI_Rev := false;
+        END_IF;
+        oMotor_Rollers_Fwd := bManual_HMI_Fwd OR (iButton_Index AND bManual_Field_Buttons);
+        oMotor_Rollers_Rev := bManual_HMI_Rev OR (iButton_Aux AND bManual_Field_Buttons);
+        bOld_Fwd := oMotor_Rollers_Fwd;
+        bOld_Rev := oMotor_Rollers_Rev;
+        IF NOT iManual_Mode_Req THEN
+            State := 0; // Goto RESET
+        END_IF;
+   15 : // EMERGENCY STOP
+        oLamp_Fault := true;
+        IF iButton_EStop THEN
+            bLocal_Emergency := true;   // This particular conv's EStop was pressed
+        END_IF;
+        IF bLocal_Emergency THEN    // Let neighbour convs know this EStop was pressed
+            oNeigh_1 := 10;
+            oNeigh_2 := 10;
+            oLamp_Fault := iClock;
+        END_IF;
+        IF (iNeigh_1 = 10) OR (iNeigh_2 = 10) THEN  // Look if neighbour EStop was pressed
+            bNeighbour_Emergency := true;
+        END_IF;
+        IF NOT iEStop_Global THEN
+            IF bLocal_Emergency OR bNeighbour_Emergency THEN
+                State := 0; // GOTO RESET
+            ELSE
+                IF (tTimer.ET > t#0s) AND oMotor_Rollers_Fwd THEN   // If conv and neighbours were fine,
+                    IF (tTimer.ET > t#0.5s) THEN                    // then go back to old State after EStop.
+                        tTimer.ET := tTimer.ET - t#0.5s;    // Compensate for drive ramp time
+                    ELSE
+                        tTimer.ET := t#0s;
+                    END_IF;
+                END_IF;
+                State := oldState;  // The conv goes back to what it was doing
+            END_IF;
+        END_IF;
+   19 : // VSD FAULT
+        IF oldState <> State THEN
+            oNeigh_1 := 9;
+            oNeigh_2 := 9;
+            oLamp_Fault := true;
+        oldState := State;
+        END_IF;
+        IF iVSD_Rollers_Ready THEN
+            State := 0; // GOTO RESET
+        END_IF;
+        (*
+   52 : // RECEIVE WHILE SENDING finish
+        IF oldState <> State THEN
+            bProduct_Unexpected := true;
+            oNeigh_1 := 4;
+            oMotor_Rollers_Fwd := true;
+            oLamp_Warning := true;
+        oldState := State;
+        END_IF;
+        
+        IF (iNeigh_1 = 4) THEN
+            bProduct_Unexpected := false;
+        END_IF;
+        
+        IF tPS_Debounce.Q THEN
+            IF bProduct_Unexpected THEN
+                State := 16;    // Goto ERROR: RECEIVING PRODUCT
+            ELSE
+                State := 3; // Goto RECEIVED PRODUCT
+            END_IF;
+        ELSIF (iNeigh_1 = 5) THEN
+                oNeigh_1 := 0;
+        END_IF;
+        
+        IF oldState <> State THEN
+            oNeigh_1 := 0;
+            oMotor_Rollers_Fwd := false;
+            oLamp_Warning := false;
+        END_IF;
+        ;*)
+END_CASE;
+
+(* Generate Momentary Obstruction Alarm *)
+IF tMomentary.Q THEN
+    Momentary_obstruction := false;
+END_IF;
+tMomentary(IN := Momentary_obstruction, PT := t#2s);
+oAlarms[1] := Momentary_obstruction;    // Generate HMI Alarm 2
+END_FUNCTION_BLOCK
+

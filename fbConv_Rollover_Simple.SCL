@@ -1,0 +1,92 @@
+FUNCTION_BLOCK fbConv_Rollover_Simple
+TITLE = 'Simple Rollover without Rollers Motor'
+VERSION : '1.0'
+KNOW_HOW_PROTECT
+AUTHOR : 'RF Brand'
+//*****************************************//
+VAR_INPUT
+    (* Physical Inputs *)
+    iButton_DHS : BOOL;
+    iButton_EStop : BOOL;
+    iButton_Fwd : BOOL;
+    iButton_Rev : BOOL;
+    
+    iVSD_Rollover_Trip : BOOL;
+    
+    (* HMI *)
+    iManual_Mode_Req : BOOL;
+END_VAR
+VAR_OUTPUT
+    (* Physical Outputs *)
+    oRollover_Motor_Fwd : BOOL;
+    oRollover_Motor_Rev : BOOL;
+    oRollover_Motor_Fast : BOOL;
+    oLamp_Indication : BOOL;
+END_VAR
+VAR_TEMP
+    bTicker : BOOL;
+END_VAR
+VAR
+    State : INT;    //0-RESET; 1-Turn FWD; 2-Turn REV;
+                    //40-CONVHALTED; 50-CONVINMANUAL;
+    bTransitionedState : BOOL;
+END_VAR
+BEGIN
+
+bTicker := M0.6;
+
+IF (iButton_EStop) OR (iVSD_Rollover_Trip) THEN
+    State := 40;
+    bTransitionedState := false;
+ELSIF (iManual_Mode_Req) THEN
+    State := 50;
+    bTransitionedState := false;
+END_IF;
+
+CASE State OF
+    0   :   oRollover_Motor_Fwd := false;
+            oRollover_Motor_Rev := false;
+            oRollover_Motor_Fast := false;
+            IF iButton_Fwd THEN
+                State := 1;
+            ELSIF iButton_Rev THEN
+                State := 2;
+            END_IF;
+            bTransitionedState := false;
+            ;
+    1   :   IF NOT bTransitionedState THEN
+                oRollover_Motor_Rev := false;
+                oRollover_Motor_Fast := true;
+                bTransitionedState := true;
+            END_IF;
+            
+            IF iButton_DHS THEN
+                oRollover_Motor_Fwd := true;
+            ELSE
+                oRollover_Motor_Fwd := false;
+            END_IF;
+            
+            IF NOT iButton_Fwd THEN
+                State := 0;
+            END_IF;
+            ;
+    2   :   IF NOT bTransitionedState THEN
+                oRollover_Motor_Fwd := false;
+                oRollover_Motor_Fast := true;
+                bTransitionedState := true;
+            END_IF;
+            
+            IF iButton_DHS THEN
+                oRollover_Motor_Rev := true;
+            ELSE
+                oRollover_Motor_Rev := false;
+            END_IF;
+            
+            IF NOT iButton_Rev THEN
+                State := 0;
+            END_IF;
+            ;
+    ELSE :  ;
+END_CASE;
+
+END_FUNCTION_BLOCK

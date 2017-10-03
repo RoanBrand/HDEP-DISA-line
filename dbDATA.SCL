@@ -1,0 +1,108 @@
+DATA_BLOCK DATA
+STRUCT
+    bConv1_EStop : BOOL;                // DBW 0
+    bConv2_EStop : BOOL;
+    bConv3_EStop : BOOL;
+    bConv4_EStop : BOOL;
+    bConv5_EStop : BOOL;
+    bConv6_EStop : BOOL;
+    bConv7_EStop : BOOL;
+    bConv8_EStop : BOOL;
+    bConv9_EStop : BOOL;
+    bConv10_EStop : BOOL;
+    bConv11_EStop : BOOL;
+    bConv12_EStop : BOOL;
+    bConv13_EStop : BOOL;
+    bConv14_EStop : BOOL;
+    bConv15_EStop : BOOL;
+    bConv16_EStop : BOOL;
+    bConv17_EStop : BOOL;               // DBW 2
+    bConv18_EStop : BOOL;
+    bConv19_EStop : BOOL;
+    bConv20_EStop : BOOL;
+    bConv21_EStop : BOOL;
+    bConv22_EStop : BOOL;
+    bConv23_EStop : BOOL;
+    bConv24_EStop : BOOL;
+    bConv25_EStop : BOOL;
+    bConv26_EStop : BOOL;
+    bConv27_EStop : BOOL;
+    bConv28_EStop : BOOL;
+    bConv29_EStop : BOOL;
+    bConv30_EStop : BOOL;
+    bConv31_EStop : BOOL;
+    bConv32_EStop : BOOL;
+    
+    bConv1_DHS : BOOL;                  // DBW 4
+    bConv7_DHS : BOOL;
+    bConv9_DHS : BOOL;
+    bConv10_DHS : BOOL;
+    bConv11_DHS : BOOL;
+    bConv12_DHS : BOOL;
+    bConv13_DHS : BOOL;
+    bConv14_DHS : BOOL;
+    bConv17_DHS : BOOL;
+    bConv20_DHS : BOOL;
+    bConv22_DHS : BOOL;
+    bConv30_DHS : BOOL;
+    
+    bConv1_Turn_VSD_F : BOOL;
+    bConv1_VSD_F : BOOL;
+    bConv2_VSD_F : BOOL;
+    bConv3_VSD_F : BOOL;
+    bConv4_VSD_F : BOOL;                // DBW 6
+    bConv5_VSD_F : BOOL;
+    bConv6_VSD_F : BOOL;
+    bConv7_Rollover_VSD_F : BOOL;
+    bConv7_Bottom_VSD_F : BOOL;
+    bConv7_Top_VSD_F : BOOL;
+    bConv8_VSD_F : BOOL;
+    bConv9_Tilt_VSD_F : BOOL;
+    bConv9_VSD_F : BOOL;
+    bConv10_Tilt_VSD_F : BOOL;
+    bConv10_VSD_F : BOOL;
+    bConv11_Tilt_VSD_F : BOOL;
+    bConv11_VSD_F : BOOL;
+    bConv12_Tilt_VSD_F : BOOL;
+    bConv12_VSD_F : BOOL;
+    bConv13_Rollover_VSD_F : BOOL;
+    bConv13_Bottom_VSD_F : BOOL;        // DBW 8
+    bConv13_Top_VSD_F : BOOL;
+    bConv14_Turn_VSD_F : BOOL;
+    bConv14_VSD_F : BOOL;
+    bConv15_VSD_F : BOOL;
+    bConv16_VSD_F : BOOL;
+    bConv17_Turn_VSD_F : BOOL;
+    bConv17_VSD_F : BOOL;
+    bConv18_VSD_F : BOOL;
+    bConv19_VSD_F : BOOL;
+    bConv20_Rollover_VSD_F : BOOL;
+    bConv20_VSD_F : BOOL;
+    bConv21_VSD_F : BOOL;
+    bConv22_Turn_VSD_F : BOOL;
+    bConv22_VSD_F : BOOL;
+    bConv23_VSD_F : BOOL;
+    bConv24_VSD_F : BOOL;               // DBW 10
+    bConv25_VSD_F : BOOL;
+    bConv26_VSD_F : BOOL;
+    bConv27_VSD_F : BOOL;
+    bConv28_VSD_F : BOOL;
+    bConv29_VSD_F : BOOL;
+    bConv30_Turn_VSD_F : BOOL;
+    bConv30_VSD_F : BOOL;
+    bConv31_VSD_F : BOOL;
+    bConv32_VSD_F : BOOL;
+    bConv33_VSD_F : BOOL;
+    
+    EStop_Global : BOOL;
+    EStop_Can_Reset : BOOL;
+    EStop_Reset : BOOL;
+    
+    SafeGate1 : BOOL;
+    SafeGate2 : BOOL;
+    SafeGate3 : BOOL;                 // DBW 12
+    SafeGate4 : BOOL;
+    
+END_STRUCT
+BEGIN
+END_DATA_BLOCK

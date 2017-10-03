@@ -1,0 +1,251 @@
+FUNCTION_BLOCK fbControl_DISA_Offload
+VAR
+    CONV1 : fbConv_Single_Direction;
+    CONV2 : fbConv_Rollover_Simple;
+    CONV3 : fbConv_Single_Direction;
+    
+    CONV4 : fbConveyor;
+    CONV5 : fbConveyor;
+    CONV6 : fbConveyor;
+    CONV7 : fbConveyor;
+    CONV8 : fbConveyor;
+    CONV9 : fbConveyor;
+    CONV10 : fbConveyor;
+    CONV11 : fbConveyor;
+    
+    ESTOP_Master : BOOL;
+    ESTOP_Line2 : BOOL;
+    ESTOP_Line3 : BOOL;
+    
+    Conv5_Send_Setting : INT;
+    HMI_Select_Straight : BOOL;
+    Offload_Line_Setting : BOOL;
+    Offload_Line_Mode : INT;
+    Offload_Line_Btns : BOOL;
+END_VAR
+BEGIN
+
+ESTOP_Line2 := NOT bLine2_Safety_Healthy;
+ESTOP_Line3 := NOT bLine3_Safety_Healthy;
+ESTOP_Master := false;
+
+IF Offload_Line_Setting THEN
+    Offload_Line_Mode := 0;
+    Offload_Line_Btns := true;
+ELSE
+    Offload_Line_Mode := 1;
+    Offload_Line_Btns := false;
+END_IF;
+
+// Conveyor 1
+CONV1   (   iButton_Index       := bLine2_Conv1_Button,
+            iButton_EStop       := ESTOP_Master,
+            iPS                 := false,
+            iVSD_Trip           := false,
+            
+            xPSless_Conveyor    := true
+        );
+bLine2_M1_Fwd                   := CONV1.oRollers_Motor_Enbl;
+bLine2_Conv1_Lamp               := CONV1.oLamp_Indication;
+
+// Conveyor 2
+CONV2   (   iButton_DHS         := bLine2_Rollover_DHS,
+            iButton_EStop       := ESTOP_Master,
+            iButton_Fwd         := bLine2_Rollover_Fwd_Sel,
+            iButton_Rev         := bLine2_Rollover_Rev_Sel,
+            
+            iVSD_Rollover_Trip  := false
+        );
+bLine2_Rollover_Fwd             := CONV2.oRollover_Motor_Fwd;
+bLine2_Rollover_Rev             := CONV2.oRollover_Motor_Rev;
+bLine2_Rollover_Fast            := CONV2.oRollover_Motor_Fast;
+bLine2_Conv2_Lamp               := CONV2.oLamp_Indication;
+        
+// Conveyor 3
+CONV3   (   iButton_Index       := bLine2_Conv2_Button,
+            iButton_EStop       := ESTOP_Master,
+            iSelect_Fwd         := bLine2_Conv3_FwdSel,
+            iSelect_Rev         := bLine2_Conv3_RevSel,
+            iPS                 := bLine2_Conv2_PS,
+            iVSD_Trip           := false,
+            
+            iNext_Conv_State    := 0,
+            iNeigh_1            := CONV4.oNeigh_0,
+
+            
+            xReceive_With_Button    := true,
+            xAuto_Reset             := true,
+            xRev_Jogg               := true
+        );
+bLine2_M3                       := CONV3.oRollers_Motor_Enbl;
+bLine2_M3_Rev                   := CONV3.oRollers_Motor_Rev;
+bLine2_Conv3_Lamp               := CONV3.oLamp_Indication;
+
+// Conveyor 4
+CONV4   (   iButton_Index       := bLine2_Conv3_Button,
+            iESTOP              := ESTOP_Master,
+            
+            iPS2                := bLine2_Conv3_PS,
+            iProx_Stop_Home     := true,
+            
+            iVSD_Fault_Rollers  := false,
+            
+            iNeigh_0            := CONV3.oNeigh_1,
+            iNeigh_1            := CONV5.oNeigh_0,
+
+            xSend_Pos           := 1,
+            xConv_Behav         := 1,
+            xAuto_Reset         := true,
+            xAuto_Start         := true
+        );
+bLine2_M4          := CONV4.oMotor_Rollers_Fwd;
+
+IF HMI_Select_Straight THEN
+    Conv5_Send_Setting := 1;
+ELSE
+    Conv5_Send_Setting := 2;
+END_IF;
+
+// Conveyor 5
+CONV5   (   iButton_Index       := false,
+            iSelect_Fwd         := true,
+            iSelect_Rev         := false,
+            iESTOP              := ESTOP_Master,
+            
+            iPS2                := bLine3_Conv1_PS2,
+            iProx_Stop_Home     := bLine3_TT2_Stop_0,
+            iProx_Stop_Pos1     := bLine3_TT2_Stop_90,
+            iProx_Slow_Home     := bLine3_TT2_Slow_0,
+            iProx_Slow_Pos1     := bLine3_TT2_Slow_90,
+            
+            iVSD_Fault_Rollers  := false,
+            iVSD_Fault_Aux1     := false,
+
+            iNeigh_0            := CONV4.oNeigh_1,
+            iNeigh_2            := CONV6.oNeigh_0,
+            iNeigh_1            := CONV10.oNeigh_0,
+            
+            xSend_Pos           := Conv5_Send_Setting,
+            xConv_Behav         := 1,
+            xAuto_Reset         := true
+        );
+bLine3_M4          := CONV5.oMotor_Rollers_Fwd;
+bLine3_M5_Fwd     := CONV5.oMotor_Aux1_Fwd;
+bLine3_M5_Rev     := CONV5.oMotor_Aux1_Rev;
+bLine3_M5_Fast    := CONV5.oMotor_Aux1_Fast;
+
+// Conveyor 6
+CONV6   (   iButton_Index       := Offload_Line_Btns,
+            iESTOP              := ESTOP_Master,
+            
+            iPS2                := bLine3_Conv4_PS,
+            iProx_Stop_Home     := true,
+            
+            iVSD_Fault_Rollers  := false,
+            
+            iNeigh_0            := CONV5.oNeigh_2,
+            iNeigh_1            := CONV7.oNeigh_0,
+
+            xSend_Pos           := 1,
+            xConv_Behav         := Offload_Line_Mode,
+            xAuto_Reset         := true,
+            xAuto_Start         := true
+        );
+bLine3_M6          := CONV6.oMotor_Rollers_Fwd;
+
+// Conveyor 7
+CONV7   (   iButton_Index       := Offload_Line_Btns,
+            iESTOP              := ESTOP_Master,
+            
+            iPS2                := bLine3_Conv5_PS,
+            iProx_Stop_Home     := true,
+            
+            iVSD_Fault_Rollers  := false,
+            
+            iNeigh_0            := CONV6.oNeigh_1,
+            iNeigh_1            := CONV8.oNeigh_0,
+
+            xSend_Pos           := 1,
+            xConv_Behav         := Offload_Line_Mode,
+            xAuto_Reset         := true,
+            xAuto_Start         := true
+        );
+bLine3_M7          := CONV7.oMotor_Rollers_Fwd;
+
+// Conveyor 8
+CONV8   (   iButton_Index       := Offload_Line_Btns,
+            iESTOP              := ESTOP_Master,
+            
+            iPS2                := bLine3_Conv8_PS,
+            iProx_Stop_Home     := true,
+            
+            iVSD_Fault_Rollers  := false,
+            
+            iNeigh_0            := CONV7.oNeigh_1,
+            iNeigh_1            := CONV9.oNeigh_0,
+
+            xSend_Pos           := 1,
+            xConv_Behav         := Offload_Line_Mode,
+            xAuto_Reset         := true,
+            xAuto_Start         := true
+        );
+bLine1_M4          := CONV8.oMotor_Rollers_Fwd;
+
+// Conveyor 9
+CONV9   (   iButton_Index       := false,
+            iESTOP              := ESTOP_Master,
+            
+            iPS2                := bLine3_Conv9_PS,
+            iProx_Stop_Home     := true,
+            
+            iVSD_Fault_Rollers  := false,
+            
+            iNeigh_0            := CONV8.oNeigh_1,
+            iNeigh_1            := 0,
+
+            xSend_Pos           := 0,
+            xConv_Behav         := 0,
+            xAuto_Reset         := true
+        );
+bLine1_M5          := CONV9.oMotor_Rollers_Fwd;
+
+// Conveyor 10
+CONV10  (   iButton_Index       := true,
+            iESTOP              := false,
+            
+            iPS2                := bLine2_Conv10_PS,
+            iProx_Stop_Home     := true,
+            
+            iVSD_Fault_Rollers  := false,
+            
+            iNeigh_0            := CONV5.oNeigh_1,
+            iNeigh_1            := CONV11.oNeigh_0,
+
+            xSend_Pos           := 1,
+            xConv_Behav         := 0,
+            xAuto_Reset         := true,
+            xAuto_Start         := true
+        );
+bLine2_M5          := CONV10.oMotor_Rollers_Fwd;
+
+// Conveyor 11
+CONV11  (   iButton_Index       := true,
+            iESTOP              := false,
+            
+            iPS2                := bLine2_Conv11_PS,
+            iProx_Stop_Home     := true,
+            
+            iVSD_Fault_Rollers  := false,
+            
+            iNeigh_0            := CONV10.oNeigh_1,
+            iNeigh_1            := DB6.CONV1.oNeigh_0,
+
+            xSend_Pos           := 1,
+            xConv_Behav         := 0,
+            xAuto_Reset         := true,
+            xAuto_Start         := true,
+            xSensor_Delay       := t#200ms
+        );
+bLine1_M1          := CONV11.oMotor_Rollers_Fwd;
+
+END_FUNCTION_BLOCK

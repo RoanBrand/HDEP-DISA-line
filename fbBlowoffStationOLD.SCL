@@ -1,0 +1,802 @@
+ FUNCTION_BLOCK fbBlowoffStation
+TITLE = 'Blowoff Station'
+VERSION : '1.1'
+KNOW_HOW_PROTECT
+AUTHOR : 'RF Brand'
+//****************************//
+VAR_INPUT
+    (* Physical Inputs *)
+    iButton_Index : BOOL;
+    iButton_Call : BOOL;
+    iEStop : BOOL;
+    
+    iPS : BOOL;
+    
+    iVSD_Fault_Rollers : BOOL;
+    
+    (* Inter-Conveyor Messages*)
+    iNeigh_0 : INT; // Previous Conveyor
+    iNeigh_1 : INT; // Next Conveyor -> Straight
+    (*  0-Nothing
+        1-AbletoReceive
+        2-YouMaySend
+        3-ReqtoSend
+        4-ProductCleared
+        5-SendingProduct
+        10-Error    *)
+        
+    (* HMI *)
+    iManual_Mode_Req : BOOL;    // User Request Manual Control
+    
+    (* Settings *)
+    xConv_Behav : INT;  (* SPECIFY CONVEYOR BEHAVIOUR: *)
+                        // 0-Basic Index Button Conv with DHS Turn;
+                        // 1-Automatic Pass on Block without user;
+                        // 2-Segmented Line Control;
+                        
+    xAuto_Reset : BOOL; // Auto Reset from SEND/RECEIVE/POSITION faults;
+    
+    xUse_FeedBack : BOOL;
+    xSkip_Tilt : BOOL;
+    
+    F_Piston_Large_Hor : BOOL;
+    F_Piston_Large_Ver : BOOL;
+    F_Edge_Clamp_Released : BOOL;
+    F_Edge_Clamp_Up : BOOL;
+    F_Piston_Lock_Unlocked : BOOL;
+    F_Piston_Lock_Locked : BOOL;
+    F_Piston_TC_Locked : BOOL;
+    F_Piston_TC_Released : BOOL;
+    
+    iStart_Station : BOOL;
+    xFixed_Cycle_Mode : BOOL;
+    iSkip_Optional: BOOL;
+END_VAR
+VAR_OUTPUT
+    (* Physical Outputs *)
+    oMotor_Rollers_Fwd : BOOL;  // Standard Conveyor Rollers
+    oMotor_Rollers_Rev : BOOL;
+    
+    oLamp_Indication : BOOL;
+    oLamp_Warning : BOOL;
+    oLamp_Fault : BOOL;
+    
+    (* Inter-Conveyor Messages*)
+    oNeigh_0 : INT; // Previous Conveyor
+    oNeigh_1 : INT; // Next Conveyor -> Straight
+    
+    oAlarm_Receive : BOOL;
+    oAlarm_Send : BOOL;
+    oAlarm_Clean : BOOL;
+    
+    Piston_Lock : BOOL;         // True: Unlocked
+    Piston_Top_Clamp : BOOL;    // True: Block clamped
+    Piston_Edge_Clamp : BOOL;   // True: Block clamped
+    Piston_Large_Up : BOOL;
+    Piston_Large_Down : BOOL;
+    Blower_Turn : BOOL;
+    Blower_Activate1 : BOOL;     // True: Blow air 1
+    Blower_Activate2 : BOOL;     // True: Blow air 2
+    
+    (* Line Control *)
+    oAble_to_Part : BOOL;
+    oReady_to_Part : BOOL;
+END_VAR
+CONST
+    TO_Send         := t#30s;
+    TO_Receive      := t#30s;
+    DEL_SendClear   := t#3s;
+END_CONST
+VAR_TEMP
+    bTicker : BOOL; // Pulse Input from Siemens Clock Memory
+END_VAR
+VAR
+    State : INT;    // Finite State Machine for Conveyor:
+                    // 0-RESET; 1-ABLETORECEIVE; 2-RECEIVING; 3-RECEIVEDPRODUCT;
+                    // 4-PRODUCTLOADEDMANUALLY; 5-POSITIONCONVDHS; 6-POSITIONCONVSEND;
+                    // 7-POSITIONCONVHOME; 8-ABLETOSEND; 9-REQUESTTOSEND;
+                    // 10-NEXTCONVBUSY; 11-SENDING; 12-FINISHSEND; 13-RECEIVEWHILESENDING;
+                    // 14-MANUALMODE; 15-HALTCONV; 16-ERROR:RECEIVE; 17-ERROR:SEND;
+                    // 18-ERROR:POSITION;
+                    
+                    //SPECIAL:
+                    // 100-
+                    
+    bTS : BOOL;             // Transitioned State Indication
+    tTimer : SFB4;          // IEC On-Delay Timer used for timing sequences
+    tPS_Debounce : SFB5;    // IEC Off-Delay Timer used for debouncing product sensor
+    bProduct_Detected : BOOL;                
+    bProduct_Unexpected : BOOL;
+    Blowoff_Steps : INT;
+    bProduct_Cleaned : BOOL;
+    
+    bManual_Field_Buttons : BOOL;
+    bManaul_HMI_Fwd : BOOL;
+    bManaul_HMI_Rev : BOOL;
+    bOld_Fwd : BOOL;
+    bOld_Rev : BOOL;
+END_VAR
+BEGIN
+bTicker := M0.6;    // Enable Siemens Clock Memory @ MB0
+
+// Product Sensor Debounce:
+tPS_Debounce(IN := iPS, PT := t#600ms);
+bProduct_Detected := tPS_Debounce.Q;
+
+IF iEStop OR iVSD_Fault_Rollers THEN
+    State := 15;    // Goto HALT CONVEYOR
+    bTS := false;
+ELSIF iManual_Mode_Req AND NOT (State = 14) THEN
+    State := 14;    // Goto MANUAL MODE
+    bTS := false;
+END_IF;
+
+CASE State OF
+    0 :     IF bTS = false THEN   // RESET
+                oMotor_Rollers_Fwd := false;
+                oMotor_Rollers_Rev := false;
+                oNeigh_0 := 0;
+                oNeigh_1 := 0;
+                oLamp_Indication := false;
+                oLamp_Warning := false;
+                oLamp_Fault := false;
+                IF xUse_FeedBack AND NOT F_Piston_Large_Hor  THEN
+                    Piston_Lock := true;
+                END_IF;
+                Piston_Large_Up := true;
+                Piston_Large_Down := false;
+                Blower_Turn := false;
+                Blower_Activate1 := false;
+                Blower_Activate2 := false;
+                tTimer(IN := false);
+                oAlarm_Receive := false;
+                oAlarm_Send := false;
+                oAlarm_Clean := false;
+                oAble_to_Part := false;
+                oReady_to_Part := false;
+                oAlarm_Receive := false;
+                bTS := true;
+            END_IF;
+            
+            IF NOT xUse_FeedBack THEN
+                tTimer(IN := true, PT := t#15s);
+                IF tTimer.Q THEN
+                    Piston_Lock := false;
+                    IF bProduct_Detected THEN
+                        State := 4;
+                    ELSE
+                        State := 1; // Goto ABLE TO REC
+                    END_IF;
+                    bTS := false;
+                END_IF;
+            END_IF;
+    
+            IF xUse_FeedBack AND F_Piston_Large_Hor THEN
+                Piston_Lock := false;
+            END_IF;
+            
+                IF F_Piston_Lock_Locked AND F_Piston_Large_Hor THEN
+                    IF bProduct_Detected THEN
+                        State := 4;
+                    ELSE
+                        State := 1; // Goto ABLE TO REC
+                    END_IF;
+                    bTS := false;
+                END_IF;
+                
+            ;
+    1   :   IF NOT bTS THEN                         // ABLE TO RECEIVE PRODUCT
+                oMotor_Rollers_Fwd := false;
+                oMotor_Rollers_Rev := false;
+                Piston_Top_Clamp := false;
+                Piston_Edge_Clamp := false;
+                oLamp_Indication := true;
+                oLamp_Fault := false;
+                oLamp_Warning := false;
+                oNeigh_0 := 1;
+                oNeigh_1 := 0;
+                oAble_to_Part := true;
+                bTS := true;
+            END_IF;
+            
+            IF (iNeigh_0 = 3) THEN
+                State := 2; // Goto RECEIVING PRODUCT
+                bTS := false;
+            ELSIF bProduct_Detected THEN
+                State := 4; // Goto 
+                bTS := false;
+            ELSIF (xConv_Behav = 2) AND (iButton_Index OR xFixed_Cycle_Mode) THEN
+                oReady_to_Part := true;
+                oLamp_Warning := false;
+            END_IF;
+            ;
+   2 :     IF bTS = false THEN   // Receiving
+                tTimer(IN := false);
+                oMotor_Rollers_Fwd := true;
+                oMotor_Rollers_Rev := false;
+                oNeigh_0 := 2;
+                oLamp_Warning := true;
+                bProduct_Unexpected := true;
+                oAble_to_Part := false;
+                bTS := true;
+            END_IF;
+            
+            tTimer(IN := true, PT := TO_Receive);
+            
+            IF (iNeigh_0 = 4) THEN
+                bProduct_Unexpected := false;
+            END_IF;
+            
+            IF bProduct_Detected THEN
+                IF bProduct_Unexpected THEN
+                    State := 16;    // Goto ERROR: RECEIVING PRODUCT
+                ELSE
+                    State := 3; // Goto RECEIVED PRODUCT
+                END_IF;
+                bTS := false;
+            ELSIF (iNeigh_0 = 5) THEN
+                oNeigh_0 := 0;
+            ELSIF (iNeigh_0 = 10) THEN
+                State := 1; // Goto ABLE TO RECEIVE PRODUCT
+                bTS := false;
+            ELSIF tTimer.Q THEN
+                State := 16;    // Goto ERROR: PRODUCT NOT RECEIVED
+                bTS := false;
+            END_IF;
+            ;
+    3 :     IF bTS = false THEN             // RECEIVED PRODUCT
+                tTimer(IN := false);
+                oMotor_Rollers_Fwd := false;
+                oMotor_Rollers_Rev := false;
+                oLamp_Indication := true;
+                oLamp_Warning := false;
+                oNeigh_0 := 6;
+                bProduct_Cleaned := false;
+                bTS := true;
+            END_IF;
+            
+            tTimer(IN := true, PT := t#2s);
+            
+            IF tTimer.Q THEN
+                IF xSkip_Tilt THEN
+                    State := 8;
+                ELSE
+                    State := 98;
+                END_IF;
+                bTS := false;
+            END_IF;
+            ;
+     4   :  IF NOT bTS THEN                         // PRODUCT LOADED MANUALLY
+                oLamp_Indication := true;
+                oAble_to_Part := false;
+                bTS := true;
+            END_IF;
+            
+            IF iButton_Index OR iStart_Station THEN
+                IF bProduct_Cleaned THEN
+                    State := 8; // Goto ABLE TO SEND PRODUCT
+                    bTS := false;
+                ELSE
+                    IF NOT xSkip_Tilt THEN
+                        State := 100;  // Goto Tilting
+                    ELSE
+                        State := 8;
+                    END_IF;
+                END_IF;
+            END_IF;
+            
+            IF NOT bProduct_Detected THEN
+                State := 0; // Goto RESET
+                bTS := false;
+            END_IF;
+            ;(*
+     97 :   IF NOT bTS THEN                 // wait for block to go past edge clamp
+                tTimer(IN := false);
+                oLamp_Warning := true;
+                bTS := true;
+            END_IF;
+            
+            tTimer(IN := true, PT := t#2s);
+            
+            IF tTimer.Q THEN
+                State := 98;
+                bTS := false;
+            END_IF;
+            ;*)
+     98 :   IF NOT bTS THEN                 // reverse before tilt to prevent slide
+                tTimer(IN := false);
+                Piston_Edge_Clamp := true;
+                oMotor_Rollers_Rev := true;
+                oLamp_Warning := true;
+                bTS := true;
+            END_IF;
+            
+            tTimer(IN := true, PT := t#1.8s);
+            
+            IF tTimer.Q THEN
+                oMotor_Rollers_Rev := false;
+                State := 100;
+                bTS := false;
+            END_IF;
+            ;   
+     99 :   IF NOT bTS THEN                 // error in tilt. recover and send on
+                tTimer(IN := false);
+                IF NOT F_Piston_Large_Hor THEN
+                    Piston_Lock := true;
+                END_IF;
+                Piston_Large_Up := true;
+                Piston_Large_Down := false;
+                Blower_Turn := false;
+                Blower_Activate1 := false;
+                Blower_Activate2 := false;
+                bTS := true;
+            END_IF;
+            
+            IF F_Piston_Large_Hor THEN
+                Piston_Lock := false;
+                Piston_Top_Clamp := false;
+                Piston_Edge_Clamp := false;
+            END_IF;
+            
+            IF F_Piston_Lock_Locked AND F_Edge_Clamp_Released AND F_Piston_TC_Released THEN
+                State := 8; // ABLE TO SEND
+                bTS := false;
+            ELSIF tTimer.Q THEN
+                State := 110;
+                bTS := false;
+            END_IF;
+            ;
+    100 :   IF bTS = false THEN                 // Tilting
+                Blowoff_Steps := 0;
+                tTimer(IN := false);
+                Piston_Top_Clamp := true;
+                Piston_Edge_Clamp := true;
+                bTS := true;
+            END_IF;
+            
+            oLamp_Warning := bTicker;
+            
+            CASE Blowoff_Steps OF
+                0   :   tTimer(IN := true, PT := t#2s);   // Check if block clamped and remove lock
+                        IF F_Piston_TC_Locked AND F_Edge_Clamp_Up THEN
+                            tTimer(IN := false);
+                            Piston_Lock := true;
+                            Blowoff_Steps := 1;
+                        ELSIF tTimer.Q THEN
+                            tTimer(IN := false);
+                            IF NOT xUse_FeedBack THEN
+                                Piston_Lock := true;
+                                Blowoff_Steps := 1;
+                            ELSE
+                                State := 101;
+                                bTS := false;
+                            END_IF;
+                        END_IF;
+                        ;
+                1   :   tTimer(IN := true, PT := t#5s);   // Wait for lock and tilt block 90deg
+                        IF F_Piston_Lock_Unlocked THEN
+                            tTimer(IN := false);
+                            Piston_Large_Up := false;
+                            Piston_Large_Down := true;
+                            Blowoff_Steps := 2;   
+                        ELSIF tTimer.Q THEN
+                            tTimer(IN := false);
+                            IF NOT xUse_FeedBack THEN
+                                Piston_Large_Up := false;
+                                Piston_Large_Down := true;
+                                Blowoff_Steps := 2;
+                            ELSE
+                                State := 102;
+                                bTS := false;
+                            END_IF;
+                        END_IF;
+                        ;
+                2   :   tTimer(IN := true, PT := t#20s);  // Wait for tilt and blowout block
+                        IF F_Piston_Large_Ver THEN
+                            tTimer(IN := false);
+                            Blower_Activate1 := true;
+                            Blower_Turn := true;
+                            Blowoff_Steps := 10;
+                        ELSIF tTimer.Q THEN
+                            tTimer(IN := false);
+                            IF NOT xUse_FeedBack THEN
+                                Blower_Activate1 := true;
+                                Blower_Turn := true;
+                                Blowoff_Steps := 10;
+                            ELSE
+                                State := 103;
+                                bTS := false;
+                            END_IF;
+                        END_IF;
+                        ;
+                3   :   tTimer(IN := true, PT := t#4s);   // Wait for blowout2 and tilt block back up
+                        IF tTimer.Q = true THEN
+                            tTimer(IN := false);
+                            Blower_Turn := false;
+                            Blower_Activate2 := false;
+                            Piston_Large_Up := true;
+                            Piston_Large_Down := false;
+                            Blowoff_Steps := 4;
+                        END_IF;
+                        ;
+                4   :   tTimer(IN := true, PT := t#30s);  // Wait for uptilt and set lock
+                        IF F_Piston_Large_Hor THEN
+                            tTimer(IN := false);
+                            //Piston_Lock := false;
+                            Blowoff_Steps := 20;
+                        ELSIF tTimer.Q THEN
+                            tTimer(IN := false);
+                            IF NOT xUse_FeedBack THEN
+                                Piston_Lock := false;
+                                Blowoff_Steps := 5;
+                            ELSE
+                                State := 104;
+                                bTS := false;
+                            END_IF;
+                        END_IF;
+                        ;
+                5   :   tTimer(IN := true, PT := t#5s);   // Wait for lock and release clamps
+                        IF F_Piston_Lock_Locked THEN
+                            tTimer(IN := false);
+                            Piston_Edge_Clamp := false;
+                            Piston_Top_Clamp := false;
+                            Blowoff_Steps := 6;
+                        ELSIF tTimer.Q THEN
+                            tTimer(IN := false);
+                            IF NOT xUse_FeedBack THEN
+                                Piston_Edge_Clamp := false;
+                                Piston_Top_Clamp := false;
+                                Blowoff_Steps := 6;
+                            ELSE
+                                State := 105;
+                                bTS := false;
+                            END_IF;
+                        END_IF;
+                        ;
+                6   :   tTimer(IN := true, PT := t#5s);   // Wait for clamps and goto next state
+                        IF F_Edge_Clamp_Released AND F_Piston_TC_Released THEN
+                            tTimer(IN := false);
+                            State := 8; // ABLE TO SEND
+                            Blowoff_Steps := 0;
+                            bTS := false;
+                        ELSIF tTimer.Q THEN
+                            tTimer(IN := false);
+                            IF NOT xUse_FeedBack THEN
+                                State := 8; // ABLE TO SEND
+                                Blowoff_Steps := 0;
+                            ELSE
+                                State := 106;
+                                bTS := false;
+                            END_IF;
+                        END_IF;
+                        ;
+               10   :   tTimer(IN := true, PT := t#8s);   // Blow 1
+                        IF tTimer.Q = true THEN
+                            tTimer(IN := false);
+                            Blower_Activate1 := false;
+                            Blowoff_Steps := 11;
+                        END_IF;
+                        ;
+               11   :   tTimer(IN := true, PT := t#500ms);
+                        IF tTimer.Q = true THEN
+                            tTimer(IN := false);
+                            Blower_Activate2 := true;
+                            Blowoff_Steps := 12;
+                        END_IF;
+                        ;
+               12   :   tTimer(IN := true, PT := t#8s);   // Blow 2
+                        IF tTimer.Q = true THEN
+                            tTimer(IN := false);
+                            Blower_Activate2 := false;
+                            bProduct_Cleaned := true;
+                            Blowoff_Steps := 3;
+                        END_IF;
+                        ;
+               20   :   tTimer(IN := true, PT := t#2s);
+                        IF tTimer.Q THEN
+                            tTimer(IN := false);
+                            Piston_Lock := false;
+                            Blowoff_Steps := 5;
+                        END_IF;
+                        ;
+                ELSE:   ;
+            END_CASE;
+            ;
+    8 :     IF NOT bTS THEN                         // ABLE TO SEND
+                oLamp_Indication := true;
+                oLamp_Fault := false;
+                oLamp_Warning := false;
+                Piston_Edge_Clamp := false;
+                Piston_Top_Clamp := false;
+                oAble_to_Part := true;
+                bTS := true;
+            END_IF;
+                        
+            IF ((xConv_Behav = 0) AND iButton_Index) OR (xConv_Behav = 1) THEN
+                State := 9; // Goto REQUEST TO SEND
+                bTS := false;
+            ELSIF (xConv_Behav = 2) THEN
+                IF (iNeigh_0 = 3) THEN
+                    State := 50;
+                    bTS := false;
+                ELSIF (iButton_Index OR xFixed_Cycle_Mode) THEN
+                    oReady_to_Part := true;
+                    oLamp_Warning := false;
+                END_IF;    
+            END_IF;
+            IF NOT bProduct_Detected THEN
+                State := 0; // Goto RESET
+                bTS := false;
+            END_IF;
+            ;
+    9   :   IF NOT bTS THEN                         // REQUEST TO SEND PRODUCT
+                oNeigh_1 := 3;
+                tTimer(IN := false);
+                oAble_to_Part := false;
+                bTS := true;
+            END_IF;
+            
+            tTimer(IN := true, PT := t#5s);
+            
+            IF (iNeigh_1 = 2) THEN
+                State := 11;    // Goto SENDING PRODUCT
+                bTS := false;
+            ELSIF tTimer.Q THEN
+                State := 10;    // Goto NEXT CONV BUSY
+                bTS := false;
+            END_IF;
+            ;
+    10  :   IF NOT bTS THEN                         // NEXT CONV BUSY
+                tTimer(IN := false);
+                oNeigh_1 := 0;
+                bTS := true;
+            END_IF;
+            
+            IF (xConv_Behav = 1) THEN
+                tTimer(IN := true, PT := t#10s);
+                oLamp_Indication := false;
+                oLamp_Warning := true;
+                
+                IF (iNeigh_1 = 1) THEN
+                    State := 9; // Goto REQUEST TO SEND PRODUCT
+                    bTS := false;
+                END_IF;
+            ELSIF (xConv_Behav = 0) THEN
+                tTimer(IN := true, PT := t#1s);
+                oLamp_Indication := false;
+                oLamp_Fault := true;
+            END_IF;
+            
+            IF tTimer.Q THEN
+                State := 8; // Goto ABLE TO SEND
+                bTS := false;
+            ELSIF bProduct_Detected THEN
+                State := 0;
+                bTS := false;
+            END_IF;
+            ;
+   11  :   IF NOT bTS THEN                         // SENDING PRODUCT
+                oMotor_Rollers_Fwd := true;
+                oMotor_Rollers_Rev := false;
+                tTimer(IN := false);
+                oNeigh_1 := 5;
+                oLamp_Warning := true;
+                bTS := true;
+            END_IF;
+            
+            tTimer(IN := true, PT := TO_Send);
+            
+            IF tTimer.Q THEN
+                State := 17;    // Goto ERROR: SEND
+                bTS := false;
+            ELSIF NOT bProduct_Detected THEN
+                State := 12;    // Goto FINISH SENDING
+                bTS := false;
+            ELSIF (iNeigh_1 = 10) THEN
+                State := 17;    // Goto ERROR: SEND
+                bTS := false;
+            ELSIF (xConv_Behav = 1) AND (iNeigh_0 = 3) THEN
+                State := 13;    // Goto RECEIVE WHILE SENDING
+            END_IF;
+            ;
+    12  :   IF NOT bTS THEN                         // FINISH SENDING
+                tTimer(IN := false);
+                oNeigh_1 := 4;
+                bProduct_Cleaned := false;
+                bTS := true;
+            END_IF;
+            
+            tTimer(IN := true, PT := DEL_SendClear);
+            
+            IF tTimer.Q THEN
+                State := 1; // Goto ABLE TO RECEIVE
+                bTS := false;
+            ELSIF (iNeigh_1 = 10) THEN
+                State := 17;    // Goto ERROR: SEND
+                bTS := false;
+            ELSIF (xConv_Behav = 1) AND (iNeigh_0 = 3) THEN
+                State := 2;    // Goto RECEIVING
+                bTS := false;
+            END_IF;
+            ;
+    13  :   IF NOT bTS THEN                         // RECEIVE WHILE SENDING
+                oNeigh_0 := 2;
+                oNeigh_1 := 5;
+                oMotor_Rollers_Fwd := true;
+                oMotor_Rollers_Rev := false;
+                oLamp_Warning := true;
+                bTS := true;
+            END_IF;
+            
+            IF NOT bProduct_Detected THEN
+                State := 52; // Goto RECEIVE WHILE SENDING finish
+                bTS := false;
+            ELSIF (iNeigh_0 = 5) THEN
+                oNeigh_0 := 0;
+            ELSIF (iNeigh_0 = 10) OR (iNeigh_1 = 10) THEN
+                State := 0; // Goto RESET
+                bTS := false;
+            END_IF;
+            ;
+   14  :   IF NOT bTS THEN                         // MANUAL MODE
+                oMotor_Rollers_Fwd := false;
+                oMotor_Rollers_Rev := false;
+                Blower_Turn := false;
+                Blower_Activate1 := false;
+                Blower_Activate2 := false;
+                oLamp_Indication := true;
+                oLamp_Warning := false;
+                oLamp_Fault := true;
+                
+                oNeigh_0 := 0;
+                oNeigh_1 := 0;
+                
+                bManual_Field_Buttons := false;
+                bManaul_HMI_Fwd := false;
+                bManaul_HMI_Rev := false;
+                bTS := true;
+            END_IF;
+            
+            IF NOT (iButton_Index OR iButton_Call) THEN
+                bManual_Field_Buttons := true;
+            END_IF;
+            
+            IF oMotor_Rollers_Fwd AND NOT bOld_Fwd THEN
+                bManaul_HMI_Fwd := true;
+            ELSIF bOld_Fwd AND NOT oMotor_Rollers_Fwd THEN
+                bManaul_HMI_Fwd := false;
+            END_IF;
+            IF oMotor_Rollers_Rev AND NOT bOld_Rev THEN
+                bManaul_HMI_Rev := true;
+            ELSIF bOld_Rev AND NOT oMotor_Rollers_Rev THEN
+                bManaul_HMI_Rev := false;
+            END_IF;
+            
+            oMotor_Rollers_Fwd := bManaul_HMI_Fwd OR (iButton_Index AND bManual_Field_Buttons);
+            oMotor_Rollers_Rev := bManaul_HMI_Rev OR (iButton_Call AND bManual_Field_Buttons);
+            
+            bOld_Fwd := oMotor_Rollers_Fwd;
+            bOld_Rev := oMotor_Rollers_Rev;
+            
+            IF NOT iManual_Mode_Req THEN
+                State := 0; // Goto RESET
+                bTS := false;
+            END_IF;
+            ;
+    15  :   IF NOT bTS THEN                         // HALT CONV
+                oMotor_Rollers_Fwd := false;
+                oMotor_Rollers_Rev := false;
+                Blower_Turn := false;
+                Blower_Activate1 := false;
+                Blower_Activate2 := false;
+                Piston_Large_Up := true;
+                Piston_Large_Down := false;
+                oLamp_Indication := false;
+                oLamp_Warning := false;
+                oLamp_Fault := true;
+                oNeigh_0 := 0;
+                oNeigh_1 := 0;
+                bTS := true;
+            END_IF;
+            
+            IF NOT (iEStop OR iVSD_Fault_Rollers) THEN
+                State := 0; // Goto RESET
+                bTS := false;
+            END_IF;
+            ;
+    16  :   IF NOT bTS THEN                         // ERROR: RECEIVING PRODUCT
+                oMotor_Rollers_Fwd := false;
+                oAlarm_Receive := true;
+                oLamp_Indication := false;
+                oLamp_Fault := true;
+                tTimer(IN := false);
+                oNeigh_0 := 10;
+                bTS := true;
+            END_IF;
+            
+            tTimer(IN := true, PT := t#1s);
+            
+            IF (xAuto_Reset AND tTimer.Q) OR iButton_Index THEN
+                State := 0; // Goto RESET
+                bTS := false;
+            END_IF;
+            ;
+    17  :   IF NOT bTS THEN                         // ERROR: SENDING PRODUCT
+                oMotor_Rollers_Fwd := false;
+                oMotor_Rollers_Rev := false;
+                oAlarm_Send := true;
+                oLamp_Indication := false;
+                oLamp_Fault := true;
+                tTimer(IN := false);
+                bTS := true;
+            END_IF;
+            
+            tTimer(IN := true, PT := t#1s);
+            
+            IF (xAuto_Reset AND tTimer.Q) OR iButton_Index THEN
+                State := 0; // Goto RESET
+                bTS := false;
+            END_IF;
+            ;
+    50  :   IF NOT bTS THEN
+                oNeigh_1 := 3;
+                oAble_to_Part := false;
+                bTS := true;
+            END_IF;
+            
+            IF (iNeigh_1 = 2) THEN
+                State := 13;
+                bTS := false;
+            END_IF;
+            ;
+    52  :   IF NOT bTS THEN                         // RECEIVE WHILE SENDING finish
+                tTimer(IN := false);
+                oNeigh_1 := 4;
+                oMotor_Rollers_Fwd := true;
+                oMotor_Rollers_Rev := false;
+                oLamp_Warning := true;
+                bProduct_Unexpected := true;
+                bTS := true;
+            END_IF;
+            
+            IF (iNeigh_0 = 4) THEN
+                bProduct_Unexpected := false;
+            END_IF;
+            
+            IF bProduct_Detected THEN
+                IF bProduct_Unexpected THEN
+                    State := 16;    // Goto ERROR: RECEIVING PRODUCT
+                ELSE
+                    State := 3; // Goto RECEIVED PRODUCT
+                END_IF;
+                bTS := false;
+            ELSIF (iNeigh_0 = 5) THEN
+                oNeigh_0 := 0;
+            END_IF;
+            ;
+    ELSE:   IF (State > 100) THEN
+                IF NOT bTS THEN
+                    oAlarm_Clean := true;
+                    oLamp_Indication := false;
+                    oLamp_Fault := true;
+                    tTimer(IN := false);
+                    bTS := true;
+                END_IF;
+                
+                tTimer(IN := true, PT := t#1s);
+            
+                IF (xAuto_Reset AND tTimer.Q) OR iButton_Index THEN
+                    IF iSkip_Optional THEN
+                        State := 99;
+                    ELSE  
+                        State := 0; // Goto RESET
+                    END_IF;
+                    bTS := false;
+                END_IF;
+                
+            END_IF;
+            ;
+END_CASE;
+
+;
+END_FUNCTION_BLOCK

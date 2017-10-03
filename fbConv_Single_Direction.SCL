@@ -1,0 +1,405 @@
+FUNCTION_BLOCK fbConv_Single_Direction
+TITLE = 'General Conveyor Single Direction'
+VERSION : '1.0'
+KNOW_HOW_PROTECT
+AUTHOR : 'RF Brand'
+//*****************************************//
+VAR_INPUT
+    (* Physical Inputs *)
+    iButton_Index : BOOL;
+    iButton_EStop : BOOL;
+    iSelect_Fwd : BOOL;
+    iSelect_Rev : BOOL;
+    
+    iPS : BOOL;
+    iVSD_Trip : BOOL;
+    
+    (* HMI *)
+    iManual_Mode_Req : BOOL;
+    
+    (* Inter-Conveyor *)
+    iPrev_Conv_State : INT;
+    iNext_Conv_State : INT;
+    
+    (* Settings *)
+    //xAuto_Mode : BOOL;
+    xPSless_Conveyor : BOOL; // Conveyor that operates without PS
+    xReceive_With_Button : BOOL;
+    xPass_On : BOOL; // Pass block on to next one if can
+    xAuto_Reset : BOOL; // Conv auto resets from 30;31
+    xCont_Flow : BOOL;
+    xRev_Jogg : BOOL;
+    xDelay_Receive : BOOL; // delay ready to receive status so that operator can remove block.
+    
+    iNeigh_1 : INT;
+END_VAR
+VAR_OUTPUT
+    (* Physical Outputs *)
+    oRollers_Motor_Enbl : BOOL;
+    oRollers_Motor_Rev : BOOL;
+    oLamp_Indication : BOOL;
+    
+    oNeigh_1 : INT;
+    
+    (* Inter-Conveyor *)
+    //oConv_State : INT;
+    //oAuto_Ready : BOOL;
+END_VAR
+CONST
+    TO_Send         := t#25s;
+    TO_Receive      := t#2m;
+    DEL_SendClear   := t#5s;
+END_CONST
+VAR_TEMP
+    bTicker : BOOL;
+END_VAR
+VAR
+    State : INT;    //0-Reset; 1-WAITFORBUTTON; 2-SENDTIMER;
+                    //5-ABLETORECEIVE; 6-RECEIVING; 10-LOADED; 15-CHECKNEXTCONV;
+                    //16-REQTOSEND; 17-SENDING; 18-FINISHSEND; 19-NEXTCONVNOTREADY;
+                    //20-REQTOSENDANDRECEIVE; 21-SENDANDRECEIVE;
+                    //30-ERRORRECEIVE; 31-ERRORSEND;
+                    //40-CONVHALTED; 50-CONVINMANUAL;
+                    
+    Timer_General : SFB4;
+    PS_Off_Delay : SFB5;
+    bTransitionedState : BOOL;
+    bProduct_Detected : BOOL;
+    bWaited_Already : BOOL;
+END_VAR
+BEGIN
+bTicker := M0.6;    // Clock memory
+
+PS_Off_Delay(IN := iPS, PT := t#1s);
+bProduct_Detected := PS_Off_Delay.q; // Add debounce
+
+IF (iButton_EStop) OR (iVSD_Trip) THEN
+    State := 40;
+    bTransitionedState := false;
+ELSIF iManual_Mode_Req AND NOT (State = 50) THEN
+    State := 50;
+    bTransitionedState := false;
+ELSIF xRev_Jogg AND iSelect_Rev AND iButton_Index AND NOT (State = 50) AND NOT (State = 40) THEN
+    State := 3;
+    bTransitionedState := false;
+END_IF;
+
+CASE State OF
+    0   :   IF NOT bTransitionedState THEN
+                oRollers_Motor_Enbl := false;
+                oRollers_Motor_Rev := false;
+                oLamp_Indication := false;
+                Timer_General(IN := false);
+                oNeigh_1 := 0;
+                bTransitionedState := true;
+            END_IF;
+            
+            Timer_General(IN := true, PT := t#500ms);
+            
+            IF xPSless_Conveyor THEN
+                State := 1;
+                bTransitionedState := false;
+            ELSIF Timer_General.Q THEN
+                IF bProduct_Detected THEN
+                    State := 10;
+                ELSE
+                    State := 5;
+                END_IF;
+                bTransitionedState := false;
+            END_IF;
+            ;
+    1   :   IF NOT bTransitionedState THEN
+                oRollers_Motor_Enbl := false;
+                oLamp_Indication := true;
+                bTransitionedState := true;
+            END_IF;
+            
+            IF iButton_Index THEN
+                State := 2;
+                bTransitionedState := false;
+            END_IF;
+            ;
+    2   :   IF NOT bTransitionedState THEN
+                oRollers_Motor_Enbl := true;
+                bTransitionedState := true;
+            END_IF;
+            
+            oLamp_Indication := bTicker;
+            
+            IF NOT iButton_Index THEN
+                State := 1;
+                bTransitionedState := false;
+            END_IF;
+            ;
+    3   :   IF NOT bTransitionedState THEN
+                oRollers_Motor_Enbl := false;
+                oRollers_Motor_Rev := true;
+                bTransitionedState := true;
+            END_IF;
+            
+            oLamp_Indication := bTicker;
+            
+            IF NOT iButton_Index THEN
+                State := 4;
+                bTransitionedState := false;
+            END_IF;
+            ;
+    4   :   IF NOT bTransitionedState THEN
+                oRollers_Motor_Rev := false;
+                oLamp_Indication := true;
+                bTransitionedState := true;
+            END_IF;
+            
+            IF iButton_Index THEN
+                State := 3;
+                bTransitionedState := false;
+            ELSIF iSelect_Fwd THEN
+                State := 0;
+                bTransitionedState := false;
+            END_IF;
+            ;
+    5   :   IF NOT bTransitionedState THEN
+                oRollers_Motor_Enbl := false;
+                oRollers_Motor_Rev := false;
+                oLamp_Indication := true;
+                bTransitionedState := true;
+            END_IF;
+            
+            IF xReceive_With_Button THEN
+                IF iButton_Index THEN
+                    State := 6;
+                    bTransitionedState := false;
+                END_IF;
+            ELSIF (iPrev_Conv_State = 16) THEN
+                State := 6;
+                bTransitionedState := false;
+            ELSIF bProduct_Detected THEN
+                State := 10;
+                bTransitionedState := false;
+            END_IF;
+            ;
+    6   :   IF NOT bTransitionedState THEN
+                oRollers_Motor_Enbl := true;
+                Timer_General(IN := false);
+                bTransitionedState := true;
+            END_IF;
+            
+            Timer_General(IN := true, PT := TO_Receive);
+            oLamp_Indication := bTicker;
+            
+            IF (iPrev_Conv_State = 31) OR (iPrev_Conv_State = 40) THEN
+                State := 5;
+                bTransitionedState := false;
+            ELSIF Timer_General.Q THEN
+                State := 30;
+                bTransitionedState := false;
+            ELSIF bProduct_Detected THEN
+                State := 10;
+                bTransitionedState := false;
+            END_IF;
+            ;
+    8   :   IF NOT bTransitionedState THEN
+                Timer_General(IN := false);
+                bTransitionedState := true;
+            END_IF;
+            
+            Timer_General(IN := true, PT := t#5s);
+            oLamp_Indication := bTicker;
+            
+            IF Timer_General.Q THEN
+                State := 5;
+                bTransitionedState := false;
+            END_IF;
+            ;
+   10   :   IF NOT bTransitionedState THEN
+                oRollers_Motor_Enbl := false;
+                oRollers_Motor_Rev := false;
+                oLamp_Indication := true;
+                bTransitionedState := true;
+            END_IF;
+            (*
+            IF xAuto_Mode THEN
+                IF (iPrev_Conv_State = 16) OR (iPrev_Conv_State = 20) THEN
+                    State := 20;
+                    bTransitionedState := false;
+                END_IF;
+            ELSE*)
+                IF iButton_Index OR xPass_On THEN
+                    State := 15;
+                    bTransitionedState := false;
+                ELSIF NOT bProduct_Detected THEN
+                    IF xDelay_Receive THEN
+                        State := 8;
+                    ELSE
+                        State := 5;
+                    END_IF;
+                    bTransitionedState := false;
+                END_IF;
+           // END_IF;
+            ;
+   15   :   IF NOT bTransitionedState THEN
+                bTransitionedState := true;
+            END_IF;
+            
+            IF (iNext_Conv_State = 5) OR (iNeigh_1 = 1) THEN
+                State := 16;
+            ELSE
+                State := 19;
+            END_IF;
+            bTransitionedState := false;
+            ;
+   16   :   IF NOT bTransitionedState THEN
+                oNeigh_1 := 3;
+                bTransitionedState := true;
+            END_IF;
+            
+            IF (iNext_Conv_State = 6) OR (iNeigh_1 = 2) THEN
+                State := 17;
+                bTransitionedState := false;
+            ELSIF xCont_Flow AND (iNext_Conv_State = 21) THEN
+                State := 17;
+                bTransitionedState := false;
+            END_IF;
+            ;
+   17   :   IF NOT bTransitionedState THEN
+                oRollers_Motor_Enbl := true;
+                Timer_General(IN := false);
+                oNeigh_1 := 0;
+                bTransitionedState := true;
+            END_IF;
+            
+            Timer_General(IN := true, PT := TO_Send);
+            oLamp_Indication := bTicker;
+            
+            IF Timer_General.Q THEN
+                State := 31;
+                bTransitionedState := false;
+            ELSIF NOT bProduct_Detected THEN
+                State := 18;       
+                bTransitionedState := false;
+            ELSIF xCont_Flow AND (iPrev_Conv_State = 16) THEN
+                State := 21;
+                bTransitionedState := false;
+            END_IF;
+            ;
+   18   :   IF NOT bTransitionedState THEN
+                oLamp_Indication := true;
+                Timer_General(IN := false);
+                bTransitionedState := true;
+            END_IF;
+            
+            Timer_General(IN := true, PT := DEL_SendClear);
+            
+            IF Timer_General.Q THEN
+                State := 5;
+                bTransitionedState := false;
+            END_IF;
+            ;
+   19   :   IF NOT bTransitionedState THEN
+                Timer_General(IN := false);
+                //bWaited_Already := false;
+                oNeigh_1 := 0;
+                bTransitionedState := true;
+            END_IF;
+            
+            IF xPass_On THEN
+                Timer_General(IN := true, PT := t#10s);
+                oLamp_Indication := true;
+                (*
+                IF (iNext_Conv_State = 5) AND NOT bWaited_Already THEN
+                    bWaited_Already := true;
+                    Timer_General(IN := false);
+                ELSIF xCont_Flow AND (iNext_Conv_State = 17) THEN
+                    State := 16;
+                    bTransitionedState := false;
+                END_IF;
+                *)
+                IF (iNext_Conv_State = 5) OR (iNeigh_1 = 1) THEN
+                    State := 16;
+                    bTransitionedState := false;
+                ELSIF xCont_Flow AND (iNext_Conv_State = 17) THEN
+                    State := 16;
+                    bTransitionedState := false;
+                END_IF;
+            ELSE
+                Timer_General(IN := true, PT := t#1s);
+                oLamp_Indication := false;
+            END_IF;
+            
+            IF Timer_General.Q THEN
+                State := 10;
+                bTransitionedState := false;
+            ELSIF NOT bProduct_Detected THEN
+                State := 0;
+                bTransitionedState := false;
+            END_IF;
+            ;
+   20   :   IF NOT bTransitionedState THEN
+                bTransitionedState := true;
+            END_IF;
+            
+            IF (iNext_Conv_State = 21) OR (iNext_Conv_State = 6) THEN
+                State := 21;
+                bTransitionedState := false;
+            END_IF;
+            ;
+   21   :   IF NOT bTransitionedState THEN
+                bTransitionedState := true;
+            END_IF;
+            
+            IF NOT bProduct_Detected THEN
+                State := 6;
+                bTransitionedState := false;
+            END_IF;
+            ;
+   30   :   IF NOT bTransitionedState THEN
+                Timer_General(IN := false);
+                oRollers_Motor_Enbl := false;
+                oRollers_Motor_Rev := false;
+                oLamp_Indication := false;
+                bTransitionedState := true;
+            END_IF;
+            
+            Timer_General(IN := true, PT := t#1s);
+            
+            IF iButton_Index THEN
+                State := 0;
+                bTransitionedState := false;
+            ELSIF xAuto_Reset AND Timer_General.Q THEN
+                State := 0;
+                bTransitionedState := false;
+            END_IF;
+            ;
+   31   :   IF NOT bTransitionedState THEN
+                Timer_General(IN := false);
+                oRollers_Motor_Enbl := false;
+                oRollers_Motor_Rev := false;
+                oLamp_Indication := false;
+                bTransitionedState := true;
+            END_IF;
+            
+            Timer_General(IN := true, PT := t#1s);
+            
+            IF iButton_Index THEN
+                State := 0;
+                bTransitionedState := false;
+            ELSIF xAuto_Reset AND Timer_General.Q THEN
+                State := 0;
+                bTransitionedState := false;
+            END_IF;
+            ;
+   50   :   IF NOT bTransitionedState THEN
+                oRollers_Motor_Enbl := false;
+                oRollers_Motor_Rev := false;
+                bTransitionedState := true;
+            END_IF;
+            oLamp_Indication := bTicker;
+            IF NOT iManual_Mode_Req THEN
+                State := 0;
+                bTransitionedState := false;
+            END_IF;
+            ;
+    ELSE :  ;
+        
+END_CASE;
+END_FUNCTION_BLOCK

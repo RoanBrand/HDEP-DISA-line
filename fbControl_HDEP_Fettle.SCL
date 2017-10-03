@@ -1,0 +1,2393 @@
+FUNCTION_BLOCK fbControl_HDEP_Fettle
+VAR
+(* Instance object variables for each conveyor station *)
+    CONV1   : fbConveyor;
+    CONV2   : fbConveyor;
+    CONV3   : fbConveyor;
+    CONV4   : fbConveyor;
+    CONV5   : fbConveyor;
+    CONV6   : fbConveyor;
+    CONV7   : fbConveyor;
+    CONV8   : fbConveyor;
+    CONV9   : fbConveyor;
+    CONV10  : fbConveyor;
+    CONV11  : fbConveyor;
+    CONV12  : fbConveyor;
+    CONV13  : fbConveyor;
+    CONV14  : fbConveyor;
+    CONV15  : fbConveyor;
+    CONV16  : fbConveyor;
+    CONV17  : fbConveyor;
+    CONV18  : fbConveyor;
+    CONV19  : fbConveyor;
+    CONV20  : fbConveyor;
+    CONV21  : fbConveyor;
+    CONV22  : fbConveyor;
+    CONV23  : fbConveyor;
+    CONV24  : fbConveyor;
+    CONV25  : fbConveyor;
+    CONV26  : fbConveyor;
+    CONV27  : fbBlowoffStation;
+    CONV28  : fbConveyor;
+    CONV29  : fbConveyor;
+    CONV30  : fbConveyor;
+    CONV31  : fbConveyor;
+    CONV32  : fbConveyor;
+    CONV33  : fbConveyor;
+    
+    xLine_Behav : INT;  // Behaviour setting of the line. Selected on HMI
+    xSetting_M_TurnT : INT; // Behaviour setting for manned turntables
+    //xSetting_UM_Rollover : INT; // Behaviour setting for unmanned rollovers
+    xSetting_Rollover7 : INT := 1;
+    xSetting_Rollover13 : INT := 1;
+    xSetting_Blowoff : INT; // Behaviour setting for the blowoffstation
+    xConv12_Setting : INT;  // temp: test new seq for conv 12-13
+    
+(* Cyclemode (xLine_Behav = 2) specific variables: *)
+    
+(*  Ready status of each zone. If every index button in a zone is pressed
+    during cyclemode, a zone becomes ready to move its products at the end
+    of the cycle. *)     
+    bZone1_Ready : BOOL;    // Conv 1-6
+    bZone2_Ready : BOOL;    // Conv 9-12
+    bZone3_Ready : BOOL;    // Conv 14-16
+    bZone4_Ready : BOOL;    // Conv 18-21
+    bZone5_Ready : BOOL;    // Conv 23-32
+(*  Empty status of each zone. If a complete zone does not contain a single product
+    then it is not necessary for it to be ready. It will not hold up the line at the
+    end of the cycle if all the index buttons are not pressed. *)
+    bZone1_Empty : BOOL;
+    bZone2_Empty : BOOL;
+    bZone3_Empty : BOOL;
+    bZone4_Empty : BOOL;
+    bZone5_Empty : BOOL;
+
+    must_i_press_button : BOOL;
+    State_Cycle : INT;
+    bCycle_Start : BOOL;
+    bBlowStation_Skip : BOOL;   // HMI option to skip the cleaning cycle of the blowoff station
+    Timer_LineCycle : SFB4;
+    Timer_Siren : sfb4;
+    Cycle_Time : TIME := t#120s;
+    Cycle_Time_Sel : INT := 4;
+    Cycle_Time_INT : DINT;
+    Time_Left : DINT;
+    
+        bLogged_Late_Conv : BOOL; // Used to log which stations were late in end of cycle
+        bUse_Overrun : BOOL := true;
+        bChange_13 : BOOL := true;  // temp: change in seq @ conv 13
+        
+        Overrun_Count : DINT;
+        Cycle_Count : INT;  // Graph 1: Total Cycle Count
+        Buyoff_Count : INT;
+        Cycle_per_Hour : INT; 
+        Cycle_per_Hour_Log : INT;   // Graph 2: Cycles Produced per Hour
+        bHour_Passed : BOOL;
+        bMay_Log : BOOL := true;
+        
+        Cycle_Duration : DINT;    // Graph 3: Cycle duration Bar chart
+        
+    bConv2_Absent : BOOL;   // Fettler absent mode
+    bConv3_Absent : BOOL;
+    bConv4_Absent : BOOL;
+    bConv5_Absent : BOOL;
+    bConv6_Absent : BOOL;
+    bConv8_Absent : BOOL := true;
+    bConv9_Absent : BOOL;
+    bConv10_Absent : BOOL;
+    bConv11_Absent : BOOL;
+    bConv12_Absent : BOOL;
+    bConv15_Absent : BOOL;
+    bConv16_Absent : BOOL;
+    bConv18_Absent : BOOL;
+    bConv19_Absent : BOOL;
+    bConv20_Absent : BOOL;
+    bConv21_Absent : BOOL;
+    bConv23_Absent : BOOL;
+    bConv24_Absent : BOOL;
+    bConv25_Absent : BOOL;
+    bConv26_Absent : BOOL;
+    bConv28_Absent : BOOL;
+    bConv29_Absent : BOOL;
+    bConv30_Absent : BOOL;
+    bConv31_Absent : BOOL;
+    bConv32_Absent : BOOL;
+END_VAR
+(* Program Control start *)
+BEGIN
+(* Set Cycle time according to user selection on HMI *)
+CASE Cycle_Time_Sel OF
+    0   :   Cycle_Time := t#60s;
+    1   :   Cycle_Time := t#90s;
+    2   :   Cycle_Time := t#108s;
+    3   :   Cycle_Time := t#114s;
+    4   :   Cycle_Time := t#120s;
+    5   :   Cycle_Time := t#126s;
+    6   :   Cycle_Time := t#132s;
+    7   :   Cycle_Time := t#138s;
+    8   :   Cycle_Time := t#144s;
+    9   :   Cycle_Time := t#150s;
+    10  :   Cycle_Time := t#180s;
+ELSE    :   ;
+END_CASE;
+Cycle_Time_INT := TIME_TO_DINT(Cycle_Time / 1000);  // Convert to HMI readable form
+
+(* Handle line behaviour according to HMI selection *)
+CASE xLine_Behav OF
+    (* 0: Semi-Auto *)
+    (****************************************************************************
+        In this mode the conveyors are hand operated.
+        Push the index button to send on the product.
+        Use direction selector switch and
+        dual-handed start button to rotate turntables and rollovers.
+    *****************************************************************************)
+    //  Overrides:
+    0 : xSetting_M_TurnT := 0;  // Conv 17,22
+        //xSetting_UM_Rollover := 0;  // Conv 7,13
+        xSetting_Blowoff := 1;  // Conv 27
+        // Rest of conveyor stations default to xLine_Behav
+    (* 1: Auto *)
+    (****************************************************************************
+        Experemental/Test mode. All conveyors try to send on product automatically.
+        Not selectable on HMI by default. All conveyors will initiate sending auto
+        and all rollovers and turntable will attempt to rotate auto.
+    *****************************************************************************)
+    //  Overrides:
+    1 : xSetting_M_TurnT := 1;
+        //xSetting_UM_Rollover := 1;
+        xSetting_Blowoff := 1;
+    (* 2: Cycle Mode *)
+    (****************************************************************************
+        Normal production mode. Conveyors in this mode sync to neighbours to
+        send on products at the same time.
+    *****************************************************************************)
+    //  Overrides:
+    2 : xSetting_M_TurnT := 0;
+        //xSetting_UM_Rollover := 1;
+        xSetting_Blowoff := 2;
+        
+(* Cycle mode State machine *)        
+    CASE State_Cycle OF
+    (* Line off *)
+    0 : Timer_LineCycle(IN := false);
+        Timer_Siren(IN := false);
+        bSiren := false;
+        Overrun_Count := 0;
+        IF bCycle_Start THEN
+            State_Cycle := 6;
+        END_IF;
+    (* Check status of zones *)
+    1 : bZone1_Ready := true;
+        bZone2_Ready := true;
+        bZone3_Ready := true;
+        bZone4_Ready := true;
+        bZone5_Ready := true;
+        
+        bZone1_Empty := false;
+        bZone2_Empty := false;
+        bZone3_Empty := false;
+        bZone4_Empty := false;
+        bZone5_Empty := false;
+        (* Zone 5 *)
+        IF (CONV32.State = 8) AND NOT (CONV33.State = 1) THEN
+            bZone5_Ready := false;
+        ELSIF NOT CONV23.oReady_to_Part THEN
+            bZone5_Ready := false;
+        ELSIF NOT CONV24.oReady_to_Part THEN
+            bZone5_Ready := false;
+        ELSIF NOT CONV25.oReady_to_Part THEN
+            bZone5_Ready := false;
+        ELSIF NOT CONV26.oReady_to_Part THEN
+            bZone5_Ready := false;
+        ELSIF NOT CONV27.bReady_to_Part THEN
+            bZone5_Ready := false;
+        ELSIF NOT CONV28.oReady_to_Part THEN
+            bZone5_Ready := false;
+        ELSIF NOT CONV29.oReady_to_Part THEN
+            bZone5_Ready := false;
+        ELSIF NOT CONV30.oReady_to_Part THEN
+            bZone5_Ready := false;
+        ELSIF NOT CONV31.oReady_to_Part THEN
+            bZone5_Ready := false;
+        ELSIF NOT CONV32.oReady_to_Part THEN
+            bZone5_Ready := false;            
+        END_IF;
+        IF NOT bZone5_Ready THEN
+            bZone5_Empty := true;
+            IF (CONV23.State <> 1) THEN
+                bZone5_Empty := false;
+            ELSIF (CONV24.State <> 1) THEN
+                bZone5_Empty := false;
+            ELSIF (CONV25.State <> 1) THEN
+                bZone5_Empty := false;
+            ELSIF (CONV26.State <> 1) THEN
+                bZone5_Empty := false;
+            ELSIF (CONV27.State <> 1) THEN
+                bZone5_Empty := false;
+            ELSIF (CONV28.State <> 1) THEN
+                bZone5_Empty := false;
+            ELSIF (CONV29.State <> 1) THEN
+                bZone5_Empty := false;
+            ELSIF (CONV30.State <> 1) THEN
+                bZone5_Empty := false;
+            ELSIF (CONV31.State <> 1) THEN
+                bZone5_Empty := false;
+            ELSIF (CONV32.State <> 1) THEN
+                bZone5_Empty := false;
+            END_IF;
+        END_IF;
+        (* Zone 4 *)
+        IF (CONV21.State = 8) AND NOT (CONV22.State = 1) THEN
+            bZone4_Ready := false;
+        ELSIF NOT CONV18.oReady_to_Part THEN
+            bZone4_Ready := false;
+        ELSIF NOT CONV19.oReady_to_Part THEN
+            bZone4_Ready := false;
+        ELSIF NOT CONV20.oReady_to_Part THEN
+            bZone4_Ready := false;
+        ELSIF NOT CONV21.oReady_to_Part THEN
+            bZone4_Ready := false;
+        END_IF;
+        IF bZone4_Ready AND (CONV21.State = 8) AND NOT bZone5_Ready AND (CONV23.State = 8) THEN
+            bZone4_Ready := false;
+        END_IF;
+        IF NOT bZone4_Ready THEN
+            bZone4_Empty := true;
+            IF (CONV18.State <> 1) THEN
+                bZone4_Empty := false;
+            ELSIF (CONV19.State <> 1) THEN
+                bZone4_Empty := false;
+            ELSIF (CONV20.State <> 1) THEN
+                bZone4_Empty := false;
+            ELSIF (CONV21.State <> 1) THEN
+                bZone4_Empty := false;
+            END_IF;
+        END_IF;
+        (* Zone 3 *)
+        IF (CONV16.State = 8) AND NOT (CONV17.State = 1) THEN
+            bZone3_Ready := false;
+        ELSIF NOT CONV14.oReady_to_Part THEN
+            bZone3_Ready := false;
+        ELSIF NOT CONV15.oReady_to_Part THEN
+            bZone3_Ready := false;
+        ELSIF NOT CONV16.oReady_to_Part THEN
+            bZone3_Ready := false;
+        END_IF;
+        IF bZone3_Ready AND (CONV16.State = 8) AND NOT bZone4_Ready AND (CONV18.State = 8) THEN
+            bZone3_Ready := false;
+        END_IF;
+        IF NOT bZone3_Ready THEN
+            bZone3_Empty := true;
+            IF (CONV14.State <> 1) THEN
+                bZone3_Empty := false;
+            ELSIF (CONV15.State <> 1) THEN
+                bZone3_Empty := false;
+            ELSIF (CONV16.State <> 1) THEN
+                bZone3_Empty := false;
+            END_IF;
+        END_IF;
+        (* Zone 2 *)
+        IF bChange_13 THEN //change start
+            IF (CONV11.State = 8) AND NOT (CONV12.State = 1) THEN // if 11 needs to send to 12 but it not empty
+                bZone2_Ready := false;
+            ELSIF NOT CONV8.oReady_to_Part THEN
+                bZone2_Ready := false;
+            ELSIF NOT CONV9.oReady_to_Part THEN
+                bZone2_Ready := false;
+            ELSIF NOT CONV10.oReady_to_Part THEN
+                bZone2_Ready := false;
+            ELSIF NOT CONV11.oReady_to_Part THEN
+                bZone2_Ready := false;
+            END_IF;
+            IF NOT bZone2_Ready THEN
+                bZone2_Empty := true;
+                IF (CONV8.State <> 1) THEN
+                    bZone2_Empty := false;
+                ELSIF (CONV9.State <> 1) THEN
+                    bZone2_Empty := false;
+                ELSIF (CONV10.State <> 1) THEN
+                    bZone2_Empty := false;
+                ELSIF (CONV11.State <> 1) THEN
+                    bZone2_Empty := false;
+                END_IF;
+            END_IF;
+        ELSE
+        IF (CONV12.State = 8) AND NOT (CONV13.State = 1) THEN
+            bZone2_Ready := false;
+        ELSIF NOT CONV8.oReady_to_Part THEN
+            bZone2_Ready := false;
+        ELSIF NOT CONV9.oReady_to_Part THEN
+            bZone2_Ready := false;
+        ELSIF NOT CONV10.oReady_to_Part THEN
+            bZone2_Ready := false;
+        ELSIF NOT CONV11.oReady_to_Part THEN
+            bZone2_Ready := false;
+        ELSIF NOT CONV12.oReady_to_Part THEN
+            bZone2_Ready := false;
+        END_IF;
+        IF bZone2_Ready AND (CONV12.State = 8) AND NOT bZone3_Ready AND (CONV14.State = 8) THEN
+            bZone2_Ready := false;
+        END_IF;
+        IF NOT bZone2_Ready THEN
+            bZone2_Empty := true;
+            IF (CONV8.State <> 1) THEN
+                bZone2_Empty := false;
+            ELSIF (CONV9.State <> 1) THEN
+                bZone2_Empty := false;
+            ELSIF (CONV10.State <> 1) THEN
+                bZone2_Empty := false;
+            ELSIF (CONV11.State <> 1) THEN
+                bZone2_Empty := false;
+            ELSIF (CONV12.State <> 1) THEN
+                bZone2_Empty := false;
+            END_IF;
+        END_IF;
+        END_IF; //end change
+        (* Zone 1 *)
+        IF (CONV6.State = 8) AND NOT (CONV7.State = 1) THEN
+            bZone1_Ready := false;
+        ELSIF NOT CONV1.oReady_to_Part THEN
+            bZone1_Ready := false;
+        ELSIF NOT CONV2.oReady_to_Part THEN
+            bZone1_Ready := false;
+        ELSIF NOT CONV3.oReady_to_Part THEN
+            bZone1_Ready := false;
+        ELSIF NOT CONV4.oReady_to_Part THEN
+            bZone1_Ready := false;
+        ELSIF NOT CONV5.oReady_to_Part THEN
+            bZone1_Ready := false;
+        ELSIF NOT CONV6.oReady_to_Part THEN
+            bZone1_Ready := false;            
+        END_IF;
+        IF bZone1_Ready AND (CONV6.State = 8) AND NOT bZone2_Ready AND (CONV8.State = 8) THEN
+            bZone1_Ready := false;
+        END_IF;
+        IF NOT bZone1_Ready THEN
+            bZone1_Empty := true;
+            IF (CONV2.State <> 1) THEN
+                bZone1_Empty := false;
+            ELSIF (CONV3.State <> 1) THEN
+                bZone1_Empty := false;
+            ELSIF (CONV4.State <> 1) THEN
+                bZone1_Empty := false;
+            ELSIF (CONV5.State <> 1) THEN
+                bZone1_Empty := false;
+            ELSIF (CONV6.State <> 1) THEN
+                bZone1_Empty := false;
+            END_IF;
+        END_IF;
+        
+        Overrun_Count := 0;
+        
+        IF bUse_Overrun THEN
+            IF (bZone1_Ready OR bZone1_Empty) AND (bZone2_Ready OR bZone2_Empty) AND (bZone3_Ready OR bZone3_Empty)
+            AND (bZone4_Ready OR bZone4_Empty) AND (bZone5_Ready OR bZone5_Empty) THEN
+                State_Cycle := 2;
+            ELSE
+                bLogged_Late_Conv := false;
+                State_Cycle := 4;
+            END_IF;
+        ELSE
+            State_Cycle := 2;
+        END_IF;
+        IF NOT bCycle_Start THEN
+            State_Cycle := 0;
+        END_IF;
+    (* Cycle the Line *)
+    2 : IF bZone1_Ready THEN
+            must_i_press_button := true;
+            IF (CONV1.State = 8) THEN
+                CONV1.State := 9;
+                CONV1.bTs := false;
+                must_i_press_button := false;
+            END_IF;
+            IF (CONV2.State = 8) AND must_i_press_button THEN
+                CONV2.State := 9;
+                CONV2.bTs := false;
+                must_i_press_button := false;
+            ELSIF CONV2.State = 1 THEN
+                must_i_press_button := true;
+            END_IF;
+            IF (CONV3.State = 8) AND must_i_press_button THEN
+                CONV3.State := 9;
+                CONV3.bTs := false;
+                must_i_press_button := false;
+            ELSIF CONV3.State = 1 THEN
+                must_i_press_button := true;
+            END_IF;
+            IF (CONV4.State = 8) AND must_i_press_button THEN
+                CONV4.State := 9;
+                CONV4.bTs := false;
+                must_i_press_button := false;
+            ELSIF CONV4.State = 1 THEN
+                must_i_press_button := true;
+            END_IF;
+            IF (CONV5.State = 8) AND must_i_press_button THEN
+                CONV5.State := 9;
+                CONV5.bTs := false;
+                must_i_press_button := false;
+            ELSIF CONV5.State = 1 THEN
+                must_i_press_button := true;
+            END_IF;
+            IF (CONV6.State = 8) AND must_i_press_button THEN
+                CONV6.State := 9;
+                CONV6.bTs := false;
+            END_IF;
+        END_IF;
+        IF bZone2_Ready THEN
+            must_i_press_button := true;
+            IF (CONV8.State = 8) THEN
+                CONV8.State := 9;
+                CONV8.bTs := false;
+                must_i_press_button := false;
+            END_IF;
+            IF (CONV9.State = 8) AND must_i_press_button THEN
+                CONV9.State := 9;
+                CONV9.bTs := false;
+                must_i_press_button := false;
+            ELSIF CONV9.State = 1 THEN
+                must_i_press_button := true;
+            END_IF;
+            IF (CONV10.State = 8) AND must_i_press_button THEN
+                CONV10.State := 9;
+                CONV10.bTs := false;
+                must_i_press_button := false;
+            ELSIF CONV10.State = 1 THEN
+                must_i_press_button := true;
+            END_IF;
+            IF (CONV11.State = 8) AND must_i_press_button THEN
+                CONV11.State := 9;
+                CONV11.bTs := false;
+                must_i_press_button := false;
+            ELSIF CONV11.State = 1 THEN
+                must_i_press_button := true;
+            END_IF;
+            IF NOT bChange_13 THEN //change start
+            IF (CONV12.State = 8) AND must_i_press_button THEN
+                CONV12.State := 9;
+                CONV12.bTs := false;
+            END_IF;
+            END_IF; //end cahnge
+        END_IF;
+        IF bZone3_Ready THEN
+            must_i_press_button := true;
+            IF (CONV14.State = 8) THEN
+                CONV14.State := 9;
+                CONV14.bTs := false;
+                must_i_press_button := false;
+            END_IF;
+            IF (CONV15.State = 8) AND must_i_press_button THEN
+                CONV15.State := 9;
+                CONV15.bTs := false;
+                must_i_press_button := false;
+            ELSIF CONV15.State = 1 THEN
+                must_i_press_button := true;
+            END_IF;
+            IF (CONV16.State = 8) AND must_i_press_button THEN
+                CONV16.State := 9;
+                CONV16.bTs := false;
+            END_IF;
+        END_IF;
+        IF bZone4_Ready THEN
+            must_i_press_button := true;
+            IF (CONV18.State = 8) THEN
+                CONV18.State := 9;
+                CONV18.bTs := false;
+                must_i_press_button := false;
+            END_IF;
+            IF (CONV19.State = 8) AND must_i_press_button THEN
+                CONV19.State := 9;
+                CONV19.bTs := false;
+                must_i_press_button := false;
+            ELSIF CONV19.State = 1 THEN
+                must_i_press_button := true;
+            END_IF;
+            IF (CONV20.State = 8) AND must_i_press_button THEN
+                CONV20.State := 9;
+                CONV20.bTs := false;
+                must_i_press_button := false;
+            ELSIF CONV20.State = 1 THEN
+                must_i_press_button := true;
+            END_IF;
+            IF (CONV21.State = 8) AND must_i_press_button THEN
+                CONV21.State := 9;
+                CONV21.bTs := false;
+            END_IF;
+        END_IF;
+        IF bZone5_Ready THEN
+            must_i_press_button := true;
+            IF (CONV23.State = 8) THEN
+                CONV23.State := 9;
+                CONV23.bTs := false;
+                must_i_press_button := false;
+            END_IF;
+            IF (CONV24.State = 8) AND must_i_press_button THEN
+                CONV24.State := 9;
+                CONV24.bTs := false;
+                must_i_press_button := false;
+            ELSIF CONV24.State = 1 THEN
+                must_i_press_button := true;
+            END_IF;
+            IF (CONV25.State = 8) AND must_i_press_button THEN
+                CONV25.State := 9;
+                CONV25.bTs := false;
+                must_i_press_button := false;
+            ELSIF CONV25.State = 1 THEN
+                must_i_press_button := true;
+            END_IF;
+            IF (CONV26.State = 8) AND must_i_press_button THEN
+                CONV26.State := 9;
+                CONV26.bTs := false;
+                must_i_press_button := false;
+            ELSIF CONV26.State = 1 THEN
+                must_i_press_button := true;
+            END_IF;
+            IF (CONV27.State = 8) AND must_i_press_button THEN
+                CONV27.internalState := 1;
+                must_i_press_button := false;
+            ELSIF CONV27.State = 1 THEN
+                must_i_press_button := true;
+            END_IF;
+            IF (CONV28.State = 8) AND must_i_press_button THEN
+                CONV28.State := 9;
+                CONV28.bTs := false;
+                must_i_press_button := false;
+            ELSIF CONV28.State = 1 THEN
+                must_i_press_button := true;
+            END_IF;
+            IF (CONV29.State = 8) AND must_i_press_button THEN
+                CONV29.State := 9;
+                CONV29.bTs := false;
+                must_i_press_button := false;
+            ELSIF CONV29.State = 1 THEN
+                must_i_press_button := true;
+            END_IF;
+            IF (CONV30.State = 8) AND must_i_press_button THEN
+                CONV30.State := 9;
+                CONV30.bTs := false;
+                must_i_press_button := false;
+            ELSIF CONV30.State = 1 THEN
+                must_i_press_button := true;
+            END_IF;
+            IF (CONV31.State = 8) AND must_i_press_button THEN
+                CONV31.State := 9;
+                CONV31.bTs := false;
+                must_i_press_button := false;
+            ELSIF CONV31.State = 1 THEN
+                must_i_press_button := true;
+            END_IF;
+            IF (CONV32.State = 8) AND must_i_press_button THEN
+                CONV32.State := 9;
+                CONV32.bTs := false;
+            END_IF;
+        END_IF;
+        
+        Cycle_Count := Cycle_Count + 1;
+        Cycle_per_Hour := Cycle_per_Hour + 1;
+        IF (Cycle_Time_INT + Overrun_Count) >= 400 THEN
+            IF Cycle_Duration = 400 THEN
+                Cycle_Duration := 399;
+            ELSE
+                Cycle_Duration := 400;
+            END_IF;
+        ELSE       
+            IF Cycle_Duration = (Cycle_Time_INT + Overrun_Count) THEN    
+                Cycle_Duration := Cycle_Time_INT + Overrun_Count + 1;
+            ELSE
+                Cycle_Duration := Cycle_Time_INT + Overrun_Count;
+            END_IF;
+        END_IF;
+        State_Cycle := 3;
+       
+        IF NOT bCycle_Start THEN
+            State_Cycle := 0;
+        END_IF;
+    (* Run the timer before next cycle *)
+    3 : Timer_LineCycle(IN := true, PT := Cycle_Time);
+        Time_Left := TIME_TO_DINT((Cycle_Time-Timer_LineCycle.ET)/1000);
+        IF Cycle_Time - Timer_LineCycle.ET <= t#35s THEN
+            bSiren := bTicker;
+            IF Cycle_Time - Timer_LineCycle.ET <= t#25s THEN
+                bSiren := false;
+            END_IF;
+        END_IF;
+        IF Cycle_Time - Timer_LineCycle.ET <= t#5s THEN
+            bSiren := true;
+        END_IF;
+        IF Timer_LineCycle.Q THEN
+            Time_Left := 0;
+            Timer_LineCycle(IN := false);
+            Timer_Siren(IN := false);
+            bSiren := false;
+            State_Cycle := 1;
+        END_IF;
+        IF NOT bCycle_Start THEN
+            State_Cycle := 0;
+        END_IF;
+   (* Overrun has occured - A zone or more was not ready at end of cycle *)
+   4 :  Timer_Siren(IN := true, PT := t#1d);
+        Overrun_Count := TIME_TO_DINT(Timer_Siren.ET/1000);
+        
+        (* Check status of zones *)
+        bZone1_Ready := true;
+        bZone2_Ready := true;
+        bZone3_Ready := true;
+        bZone4_Ready := true;
+        bZone5_Ready := true;
+        
+        bZone1_Empty := false;
+        bZone2_Empty := false;
+        bZone3_Empty := false;
+        bZone4_Empty := false;
+        bZone5_Empty := false;
+        (* Zone 5 *)
+        IF (CONV32.State = 8) AND NOT (CONV33.State = 1) THEN
+            bZone5_Ready := false;
+            IF NOT bLogged_Late_Conv THEN
+                TIMES.bConv33_LateCount := TIMES.bConv33_LateCount + 1;
+                fcLogOverrun(33);
+            END_IF;
+        END_IF;
+        IF NOT CONV23.oReady_to_Part THEN
+            bZone5_Ready := false;
+            IF NOT bLogged_Late_Conv THEN
+                TIMES.bConv23_LateCount := TIMES.bConv23_LateCount + 1;
+            END_IF;
+        END_IF;
+        IF NOT CONV24.oReady_to_Part THEN
+            bZone5_Ready := false;
+            IF NOT bLogged_Late_Conv THEN
+                TIMES.bConv24_LateCount := TIMES.bConv24_LateCount + 1;
+            END_IF;
+        END_IF;
+        IF NOT CONV25.oReady_to_Part THEN
+            bZone5_Ready := false;
+            IF NOT bLogged_Late_Conv THEN
+                TIMES.bConv25_LateCount := TIMES.bConv25_LateCount + 1;
+            END_IF;
+        END_IF;
+        IF NOT CONV26.oReady_to_Part THEN
+            bZone5_Ready := false;
+            IF NOT bLogged_Late_Conv THEN
+                TIMES.bConv26_LateCount := TIMES.bConv26_LateCount + 1;
+            END_IF;
+        END_IF;
+        IF NOT CONV27.bReady_to_Part THEN
+            bZone5_Ready := false;
+            IF NOT bLogged_Late_Conv THEN
+                TIMES.bConv27_LateCount := TIMES.bConv27_LateCount + 1;
+            END_IF;
+        END_IF;
+        IF NOT CONV28.oReady_to_Part THEN
+            bZone5_Ready := false;
+            IF NOT bLogged_Late_Conv THEN
+                TIMES.bConv28_LateCount := TIMES.bConv28_LateCount + 1;
+            END_IF;
+        END_IF;
+        IF NOT CONV29.oReady_to_Part THEN
+            bZone5_Ready := false;
+            IF NOT bLogged_Late_Conv THEN
+                TIMES.bConv29_LateCount := TIMES.bConv29_LateCount + 1;
+            END_IF;
+        END_IF;
+        IF NOT CONV30.oReady_to_Part THEN
+            bZone5_Ready := false;
+            IF NOT bLogged_Late_Conv THEN
+                TIMES.bConv30_LateCount := TIMES.bConv30_LateCount + 1;
+            END_IF;
+        END_IF;
+        IF NOT CONV31.oReady_to_Part THEN
+            bZone5_Ready := false;
+            IF NOT bLogged_Late_Conv THEN
+                TIMES.bConv31_LateCount := TIMES.bConv31_LateCount + 1;
+            END_IF;
+        END_IF;
+        IF NOT CONV32.oReady_to_Part THEN
+            bZone5_Ready := false; 
+            IF NOT bLogged_Late_Conv THEN
+                TIMES.bConv32_LateCount := TIMES.bConv32_LateCount + 1;
+            END_IF;
+        END_IF;
+        IF NOT bZone5_Ready THEN
+            bZone5_Empty := true;
+            IF (CONV23.State <> 1)  THEN
+                bZone5_Empty := false;
+            ELSIF (CONV24.State <> 1)  THEN
+                bZone5_Empty := false;
+            ELSIF (CONV25.State <> 1)  THEN
+                bZone5_Empty := false;
+            ELSIF (CONV26.State <> 1)  THEN
+                bZone5_Empty := false;
+            ELSIF (CONV27.State <> 1)  THEN
+                bZone5_Empty := false;
+            ELSIF (CONV28.State <> 1)  THEN
+                bZone5_Empty := false;
+            ELSIF (CONV29.State <> 1)  THEN
+                bZone5_Empty := false;
+            ELSIF (CONV30.State <> 1)  THEN
+                bZone5_Empty := false;
+            ELSIF (CONV31.State <> 1)  THEN
+                bZone5_Empty := false;
+            ELSIF (CONV32.State <> 1)  THEN
+                bZone5_Empty := false;
+            END_IF;
+        END_IF;
+        (* Zone 4 *)
+        IF (CONV21.State = 8) AND NOT (CONV22.State = 1) THEN
+            bZone4_Ready := false;
+            IF NOT bLogged_Late_Conv THEN
+                TIMES.bConv22_LateCount := TIMES.bConv22_LateCount + 1;
+            END_IF;
+        END_IF;
+        IF NOT CONV18.oReady_to_Part THEN
+            bZone4_Ready := false;
+            IF NOT bLogged_Late_Conv THEN
+                TIMES.bConv18_LateCount := TIMES.bConv18_LateCount + 1;
+            END_IF;
+        END_IF;
+        IF NOT CONV19.oReady_to_Part THEN
+            bZone4_Ready := false;
+            IF NOT bLogged_Late_Conv THEN
+                TIMES.bConv19_LateCount := TIMES.bConv19_LateCount + 1;
+            END_IF;
+        END_IF;
+        IF NOT CONV20.oReady_to_Part THEN
+            bZone4_Ready := false;
+            IF NOT bLogged_Late_Conv THEN
+                TIMES.bConv20_LateCount := TIMES.bConv20_LateCount + 1;
+            END_IF;
+        END_IF;
+        IF NOT CONV21.oReady_to_Part THEN
+            bZone4_Ready := false;
+            IF NOT bLogged_Late_Conv THEN
+                TIMES.bConv21_LateCount := TIMES.bConv21_LateCount + 1;
+            END_IF;
+        END_IF;
+        IF bZone4_Ready AND (CONV21.State = 8) AND NOT bZone5_Ready AND (CONV23.State = 8) THEN
+            bZone4_Ready := false;
+        END_IF;
+        IF NOT bZone4_Ready THEN
+            bZone4_Empty := true;
+            IF (CONV18.State <> 1) THEN
+                bZone4_Empty := false;
+            ELSIF (CONV19.State <> 1) THEN
+                bZone4_Empty := false;
+            ELSIF (CONV20.State <> 1) THEN
+                bZone4_Empty := false;
+            ELSIF (CONV21.State <> 1) THEN
+                bZone4_Empty := false;
+            END_IF;
+        END_IF;
+        (* Zone 3 *)
+        IF (CONV16.State = 8) AND NOT (CONV17.State = 1) THEN
+            bZone3_Ready := false;
+            IF NOT bLogged_Late_Conv THEN
+                TIMES.bConv17_LateCount := TIMES.bConv17_LateCount + 1;
+            END_IF;
+        END_IF;
+        IF NOT CONV14.oReady_to_Part THEN
+            bZone3_Ready := false;
+            IF NOT bLogged_Late_Conv THEN
+                TIMES.bConv14_LateCount := TIMES.bConv14_LateCount + 1;
+            END_IF;
+        END_IF;
+        IF NOT CONV15.oReady_to_Part THEN
+            bZone3_Ready := false;
+            IF NOT bLogged_Late_Conv THEN
+                TIMES.bConv15_LateCount := TIMES.bConv15_LateCount + 1;
+            END_IF;
+        END_IF;
+        IF NOT CONV16.oReady_to_Part THEN
+            bZone3_Ready := false;
+            IF NOT bLogged_Late_Conv THEN
+                TIMES.bConv16_LateCount := TIMES.bConv16_LateCount + 1;
+            END_IF;
+        END_IF;
+        IF bZone3_Ready AND (CONV16.State = 8) AND NOT bZone4_Ready AND (CONV18.State = 8) THEN
+            bZone3_Ready := false;
+        END_IF;
+        IF NOT bZone3_Ready THEN
+            bZone3_Empty := true;
+            IF (CONV14.State <> 1) THEN
+                bZone3_Empty := false;
+            ELSIF (CONV15.State <> 1) THEN
+                bZone3_Empty := false;
+            ELSIF (CONV16.State <> 1) THEN
+                bZone3_Empty := false;
+            END_IF;
+        END_IF;
+        (* Zone 2 *)
+        IF bChange_13 THEN //change start
+            IF (CONV11.State = 8) AND NOT (CONV12.State = 1) THEN // if 11 needs to send to 12 but it not empty
+                bZone2_Ready := false;
+                IF NOT bLogged_Late_Conv THEN
+                    TIMES.bConv12_LateCount := TIMES.bConv12_LateCount + 1;
+                END_IF;
+            ELSIF NOT CONV8.oReady_to_Part THEN
+                bZone2_Ready := false;
+                IF NOT bLogged_Late_Conv THEN
+                    TIMES.bConv8_LateCount := TIMES.bConv8_LateCount + 1;
+                END_IF;
+            ELSIF NOT CONV9.oReady_to_Part THEN
+                bZone2_Ready := false;
+                IF NOT bLogged_Late_Conv THEN
+                    TIMES.bConv9_LateCount := TIMES.bConv9_LateCount + 1;
+                END_IF;
+            ELSIF NOT CONV10.oReady_to_Part THEN
+                bZone2_Ready := false;
+                IF NOT bLogged_Late_Conv THEN
+                    TIMES.bConv10_LateCount := TIMES.bConv10_LateCount + 1;
+                END_IF;
+            ELSIF NOT CONV11.oReady_to_Part THEN
+                bZone2_Ready := false;
+                IF NOT bLogged_Late_Conv THEN
+                    TIMES.bConv11_LateCount := TIMES.bConv11_LateCount + 1;
+                END_IF;
+            END_IF;
+            IF NOT bZone2_Ready THEN
+                bZone2_Empty := true;
+                IF (CONV8.State <> 1) THEN
+                    bZone2_Empty := false;
+                ELSIF (CONV9.State <> 1) THEN
+                    bZone2_Empty := false;
+                ELSIF (CONV10.State <> 1) THEN
+                    bZone2_Empty := false;
+                ELSIF (CONV11.State <> 1) THEN
+                    bZone2_Empty := false;
+                END_IF;
+            END_IF;
+        ELSE
+        IF (CONV12.State = 8) AND NOT (CONV13.State = 1) THEN
+            bZone2_Ready := false;
+            IF NOT bLogged_Late_Conv THEN
+                TIMES.bConv13_LateCount := TIMES.bConv13_LateCount + 1;
+            END_IF;
+        ELSIF NOT CONV8.oReady_to_Part THEN
+            bZone2_Ready := false;
+            IF NOT bLogged_Late_Conv THEN
+                TIMES.bConv8_LateCount := TIMES.bConv8_LateCount + 1;
+            END_IF;
+        END_IF;
+        IF NOT CONV9.oReady_to_Part THEN
+            bZone2_Ready := false;
+            IF NOT bLogged_Late_Conv THEN
+                TIMES.bConv9_LateCount := TIMES.bConv9_LateCount + 1;
+            END_IF;
+        END_IF;
+        IF NOT CONV10.oReady_to_Part THEN
+            bZone2_Ready := false;
+            IF NOT bLogged_Late_Conv THEN
+                TIMES.bConv10_LateCount := TIMES.bConv10_LateCount + 1;
+            END_IF;
+        END_IF;
+        IF NOT CONV11.oReady_to_Part THEN
+            bZone2_Ready := false;
+            IF NOT bLogged_Late_Conv THEN
+                TIMES.bConv11_LateCount := TIMES.bConv11_LateCount + 1;
+            END_IF;
+        END_IF;
+        IF NOT CONV12.oReady_to_Part THEN
+            bZone2_Ready := false;
+            IF NOT bLogged_Late_Conv THEN
+                TIMES.bConv12_LateCount := TIMES.bConv12_LateCount + 1;
+            END_IF;
+        END_IF;
+        IF bZone2_Ready AND (CONV12.State = 8) AND NOT bZone3_Ready AND (CONV14.State = 8) THEN
+            bZone2_Ready := false;
+        END_IF;
+        IF NOT bZone2_Ready THEN
+            bZone2_Empty := true;
+            IF (CONV8.State <> 1) THEN
+                bZone2_Empty := false;
+            ELSIF (CONV9.State <> 1) THEN
+                bZone2_Empty := false;
+            ELSIF (CONV10.State <> 1) THEN
+                bZone2_Empty := false;
+            ELSIF (CONV11.State <> 1) THEN
+                bZone2_Empty := false;
+            ELSIF (CONV12.State <> 1) THEN
+                bZone2_Empty := false;
+            END_IF;
+        END_IF;
+        END_IF;//end change
+        (* Zone 1 *)
+        IF (CONV6.State = 8) AND NOT (CONV7.State = 1) THEN
+            bZone1_Ready := false;
+            IF NOT bLogged_Late_Conv THEN
+                TIMES.bConv7_LateCount := TIMES.bConv7_LateCount + 1;
+            END_IF;
+        END_IF;
+        IF NOT CONV1.oReady_to_Part THEN
+            bZone1_Ready := false;
+            IF NOT bLogged_Late_Conv THEN
+                TIMES.bConv1_LateCount := TIMES.bConv1_LateCount + 1;
+            END_IF;
+        END_IF;
+        IF NOT CONV2.oReady_to_Part THEN
+            bZone1_Ready := false;
+            IF NOT bLogged_Late_Conv THEN
+                TIMES.bConv2_LateCount := TIMES.bConv2_LateCount + 1;
+            END_IF;
+        END_IF;
+        IF NOT CONV3.oReady_to_Part THEN
+            bZone1_Ready := false;
+            IF NOT bLogged_Late_Conv THEN
+                TIMES.bConv3_LateCount := TIMES.bConv3_LateCount + 1;
+            END_IF;
+        END_IF;
+        IF NOT CONV4.oReady_to_Part THEN
+            bZone1_Ready := false;
+            IF NOT bLogged_Late_Conv THEN
+                TIMES.bConv4_LateCount := TIMES.bConv4_LateCount + 1;
+            END_IF;
+        END_IF;
+        IF NOT CONV5.oReady_to_Part THEN
+            bZone1_Ready := false;
+            IF NOT bLogged_Late_Conv THEN
+                TIMES.bConv5_LateCount := TIMES.bConv5_LateCount + 1;
+            END_IF;
+        END_IF;
+        IF NOT CONV6.oReady_to_Part THEN
+            bZone1_Ready := false;
+            IF NOT bLogged_Late_Conv THEN
+                TIMES.bConv6_LateCount := TIMES.bConv6_LateCount + 1;
+            END_IF;
+        END_IF;
+        IF bZone1_Ready AND (CONV6.State = 8) AND NOT bZone2_Ready AND (CONV8.State = 8) THEN
+            bZone1_Ready := false;
+        END_IF;
+        IF NOT bZone1_Ready THEN
+            bZone1_Empty := true;
+            IF (CONV2.State <> 1) THEN
+                bZone1_Empty := false;
+            ELSIF (CONV3.State <> 1) THEN
+                bZone1_Empty := false;
+            ELSIF (CONV4.State <> 1) THEN
+                bZone1_Empty := false;
+            ELSIF (CONV5.State <> 1) THEN
+                bZone1_Empty := false;
+            ELSIF (CONV6.State <> 1) THEN
+                bZone1_Empty := false;
+            END_IF;
+        END_IF;
+        
+        bLogged_Late_Conv := true;
+        
+       IF (bZone1_Ready OR bZone1_Empty) AND (bZone2_Ready OR bZone2_Empty) AND (bZone3_Ready OR bZone3_Empty)
+       AND (bZone4_Ready OR bZone4_Empty) AND (bZone5_Ready OR bZone5_Empty) THEN
+            Timer_Siren(IN := false);
+            Overrun_Count := Overrun_Count + 5;
+            State_Cycle := 5;
+        END_IF;
+        IF NOT bCycle_Start THEN
+            State_Cycle := 0;
+        END_IF;
+    (* Overrun has passed. Whole line ready now *)
+    5 : Timer_Siren(IN := true, PT := t#5s);
+            bSiren := true;
+        IF Timer_Siren.Q THEN
+            bSiren := false;
+            State_Cycle := 2;
+        END_IF;
+        IF NOT bCycle_Start THEN
+            State_Cycle := 0;
+        END_IF;
+    (* Sound the Siren before starting next cycle *)    
+    6 : Timer_Siren(IN := true, PT := t#5s);
+        bSiren := true;
+        IF Timer_Siren.Q THEN
+            bSiren := false;
+            State_Cycle := 1;
+        END_IF;
+        IF NOT bCycle_Start THEN
+            State_Cycle := 0;
+        END_IF;
+END_CASE;
+
+IF DATA.EStop_Global OR (xLine_Behav <> 2) THEN   // Turn off cycle when EStop or not in CycleMode anymore
+    bSiren := false;
+    State_Cycle := 0;
+    bCycle_Start := false;
+END_IF;
+END_CASE;
+
+(* START OF CONVEYOR STATION OBJECT CALLS - LINK I/O (Symbol list) to program logic *)
+// Conveyor 1
+CONV1   (   iButton_Index       := bConv1_index,
+            iButton_Call        := bConv1_Call,
+            iSelect_Fwd         := bConv1_Fwd_Rev,
+            iSelect_Rev         := NOT bConv1_Fwd_Rev,
+            iDHS                := DATA.bConv1_DHS,
+            iESTOP              := DATA.EStop_Global,
+            
+            iPS1                := bConv1_PS1,
+            iPS2                := bConv1_PS2,
+            iProx_Stop_Home     := NOT bConv1_Prox_Stop_0,
+            iProx_Stop_Pos1     := NOT bConv1_Prox_Stop_90,
+            iProx_Slow_Home     := NOT bConv1_Prox_Slow_0,
+            iProx_Slow_Pos1     := NOT bConv1_Prox_Slow_90,
+            
+            iVSD_Fault_Rollers  := DATA.bConv1_VSD_F,
+            iVSD_Fault_Aux1     := DATA.bConv1_Turn_VSD_F,
+
+            iNeigh_0            := DB4.CONV11.oNeigh_1,
+            iNeigh_2            := CONV2.oNeigh_0,
+            
+            xSend_Pos           := 3,
+            xConv_Behav         := xLine_Behav,
+            xAuto_Reset         := true,
+            xSegment_Startpoint := true,
+            xCycle_Running      := bCycle_Start,
+            xSiren              := bSiren,
+            
+            xSensor_Delay       := t#1000ms,
+            xProxy_replace      := true
+        );
+bConv1_Fwd          := CONV1.oMotor_Rollers_Fwd;
+bConv1_Rev          := CONV1.oMotor_Rollers_Rev;
+bConv1_Turn_Fwd     := CONV1.oMotor_Aux1_Fwd;
+bConv1_Turn_Rev     := CONV1.oMotor_Aux1_Rev;
+bConv1_Turn_Fast    := CONV1.oMotor_Aux1_Fast;
+bConv1_Ind_Green    := CONV1.oLamp_Indication;
+bConv1_Ind_Orange   := CONV1.oLamp_Warning;
+bConv1_Ind_Red      := CONV1.oLamp_Fault;
+
+(* PISTON *)
+IF ((CONV1.State = 5) AND NOT (CONV1.iProx_Stop_Pos1)) OR (CONV1.State = 7) THEN
+    bConv1_Turn_Lock := false;
+END_IF;
+IF (CONV1.State = 1) OR (CONV1.State = 8) THEN
+    bConv1_Turn_Lock := true;
+END_IF;
+
+IF CONV1.oAlarm_Receive AND NOT ERROR.bConv1_Rec THEN
+    ERROR.bConv1_Rec_Count := ERROR.bConv1_Rec_Count + 1;
+END_IF;
+IF CONV1.oAlarm_Send AND NOT ERROR.bConv1_Send THEN
+    ERROR.bConv1_Send_Count := ERROR.bConv1_Send_Count + 1;
+END_IF;
+ERROR.bConv1_Rec    := CONV1.oAlarm_Receive;
+ERROR.bConv1_Send   := CONV1.oAlarm_Send;
+
+// Conveyor 2
+CONV2   (   iButton_Index       := bConv2_index,
+            iButton_Call        := bConv2_Call,
+            iESTOP              := DATA.EStop_Global,
+            
+            iPS2                := bConv2_PS,
+            iProx_Stop_Home     := true,
+            
+            iVSD_Fault_Rollers  := DATA.bConv2_VSD_F,
+            
+            iNeigh_0            := CONV1.oNeigh_2,
+            iNeigh_1            := CONV3.oNeigh_0,
+            xCycle_Running      := bCycle_Start,
+            xSiren              := bSiren,
+
+            xSend_Pos           := 1,
+            xConv_Behav         := xLine_Behav,
+            xFixed_Cycle_Mode   := bConv2_Absent,
+            xAuto_Reset         := true,
+            xSensor_Delay       := t#1000ms,
+            xProxy_replace      := true
+        );
+bConv2_Fwd          := CONV2.oMotor_Rollers_Fwd;
+bConv2_Rev          := CONV2.oMotor_Rollers_Rev;
+bConv2_Ind_Green    := CONV2.oLamp_Indication;
+bConv2_Ind_Orange   := CONV2.oLamp_Warning;
+bConv2_Ind_Red      := CONV2.oLamp_Fault;
+
+IF conv2.oAlarm_Receive AND NOT ERROR.bconv2_Rec THEN
+    ERROR.bconv2_Rec_Count := ERROR.bconv2_Rec_Count + 1;
+END_IF;
+IF conv2.oAlarm_Send AND NOT ERROR.bconv2_Send THEN
+    ERROR.bconv2_Send_Count := ERROR.bconv2_Send_Count + 1;
+END_IF;
+ERROR.bConv2_Rec    := CONV2.oAlarm_Receive;
+ERROR.bConv2_Send   := CONV2.oAlarm_Send;
+
+// Conveyor 3
+CONV3   (   iButton_Index       := bConv3_index,
+            iButton_Call        := bConv3_Call,
+            iESTOP              := DATA.EStop_Global,
+            
+            iPS2                := bConv3_PS,
+            iProx_Stop_Home     := true,
+            
+            iVSD_Fault_Rollers  := DATA.bConv3_VSD_F,
+            
+            iNeigh_0            := CONV2.oNeigh_1,
+            iNeigh_1            := CONV4.oNeigh_0,
+            xCycle_Running      := bCycle_Start,
+            xSiren              := bSiren,
+
+            xSend_Pos           := 1,
+            xConv_Behav         := xLine_Behav,
+            xFixed_Cycle_Mode   := bConv3_Absent,
+            xAuto_Reset         := true,
+            xSensor_Delay       := t#1000ms,
+            xProxy_replace      := true
+        );
+bConv3_Fwd          := CONV3.oMotor_Rollers_Fwd;
+bConv3_Rev          := CONV3.oMotor_Rollers_Rev;
+bConv3_Ind_Green    := CONV3.oLamp_Indication;
+bConv3_Ind_Orange   := CONV3.oLamp_Warning;
+bConv3_Ind_Red      := CONV3.oLamp_Fault;
+
+IF conv3.oAlarm_Receive AND NOT ERROR.bconv3_Rec THEN
+    ERROR.bconv3_Rec_Count := ERROR.bconv3_Rec_Count + 1;
+END_IF;
+IF conv3.oAlarm_Send AND NOT ERROR.bconv3_Send THEN
+    ERROR.bconv3_Send_Count := ERROR.bconv3_Send_Count + 1;
+END_IF;
+ERROR.bConv3_Rec    := CONV3.oAlarm_Receive;
+ERROR.bConv3_Send   := CONV3.oAlarm_Send;
+
+// Conveyor 4
+CONV4   (   iButton_Index       := bConv4_index,
+            iButton_Call        := bConv4_Call,
+            iESTOP              := DATA.EStop_Global,
+            
+            iPS2                := bConv4_PS,
+            iProx_Stop_Home     := true,
+            
+            iVSD_Fault_Rollers  := DATA.bConv4_VSD_F,
+            
+            iNeigh_0            := CONV3.oNeigh_1,
+            iNeigh_1            := CONV5.oNeigh_0,
+            xCycle_Running      := bCycle_Start,
+            xSiren              := bSiren,
+
+            xSend_Pos           := 1,
+            xConv_Behav         := xLine_Behav,
+            xFixed_Cycle_Mode   := bConv4_Absent,
+            xAuto_Reset         := true,
+            xSensor_Delay       := t#1000ms,
+            xProxy_replace      := true
+        );
+bConv4_Fwd          := CONV4.oMotor_Rollers_Fwd;
+bConv4_Rev          := CONV4.oMotor_Rollers_Rev;
+bConv4_Ind_Green    := CONV4.oLamp_Indication;
+bConv4_Ind_Orange   := CONV4.oLamp_Warning;
+bConv4_Ind_Red      := CONV4.oLamp_Fault;
+
+IF conv4.oAlarm_Receive AND NOT ERROR.bconv4_Rec THEN
+    ERROR.bconv4_Rec_Count := ERROR.bconv4_Rec_Count + 1;
+END_IF;
+IF conv4.oAlarm_Send AND NOT ERROR.bconv4_Send THEN
+    ERROR.bconv4_Send_Count := ERROR.bconv4_Send_Count + 1;
+END_IF;
+ERROR.bConv4_Rec    := CONV4.oAlarm_Receive;
+ERROR.bConv4_Send   := CONV4.oAlarm_Send;
+
+// Conveyor 5
+CONV5   (   iButton_Index       := bConv5_index,
+            iButton_Call        := bConv5_Call,
+            iESTOP              := DATA.EStop_Global,
+            
+            iPS2                := bConv5_PS,
+            iProx_Stop_Home     := true,
+            
+            iVSD_Fault_Rollers  := DATA.bConv5_VSD_F,
+            
+            iNeigh_0            := CONV4.oNeigh_1,
+            iNeigh_1            := CONV6.oNeigh_0,
+            xCycle_Running      := bCycle_Start,
+            xSiren              := bSiren,
+
+            xSend_Pos           := 1,
+            xConv_Behav         := xLine_Behav,
+            xFixed_Cycle_Mode   := bConv5_Absent,
+            xAuto_Reset         := true,
+            
+            xProxy_replace      := true
+        );
+bConv5_Fwd          := CONV5.oMotor_Rollers_Fwd;
+bConv5_Rev          := CONV5.oMotor_Rollers_Rev;
+bConv5_Ind_Green    := CONV5.oLamp_Indication;
+bConv5_Ind_Orange   := CONV5.oLamp_Warning;
+bConv5_Ind_Red      := CONV5.oLamp_Fault;
+
+IF conv5.oAlarm_Receive AND NOT ERROR.bconv5_Rec THEN
+    ERROR.bconv5_Rec_Count := ERROR.bconv5_Rec_Count + 1;
+END_IF;
+IF conv5.oAlarm_Send AND NOT ERROR.bconv5_Send THEN
+    ERROR.bconv5_Send_Count := ERROR.bconv5_Send_Count + 1;
+END_IF;
+ERROR.bConv5_Rec    := CONV5.oAlarm_Receive;
+ERROR.bConv5_Send   := CONV5.oAlarm_Send;
+
+// Conveyor 6
+CONV6   (   iButton_Index       := bConv6_index,
+            iButton_Call        := bConv6_Call,
+            iESTOP              := DATA.EStop_Global,
+            
+            iPS2                := bConv6_PS,
+            iProx_Stop_Home     := true,
+            
+            iVSD_Fault_Rollers  := DATA.bConv6_VSD_F,
+            
+            iNeigh_0            := CONV5.oNeigh_1,
+            iNeigh_1            := CONV7.oNeigh_0,
+            xCycle_Running      := bCycle_Start,
+            xSiren              := bSiren,
+
+            xSend_Pos           := 1,
+            xConv_Behav         := xLine_Behav,
+            xFixed_Cycle_Mode   := bConv6_Absent,
+            xAuto_Reset         := true,
+            
+            xProxy_replace      := true
+        );
+bConv6_Fwd          := CONV6.oMotor_Rollers_Fwd;
+bConv6_Rev          := CONV6.oMotor_Rollers_Rev;
+bConv6_Ind_Green    := CONV6.oLamp_Indication;
+bConv6_Ind_Orange   := CONV6.oLamp_Warning;
+bConv6_Ind_Red      := CONV6.oLamp_Fault;
+
+IF conv6.oAlarm_Receive AND NOT ERROR.bconv6_Rec THEN
+    ERROR.bconv6_Rec_Count := ERROR.bconv6_Rec_Count + 1;
+END_IF;
+IF conv6.oAlarm_Send AND NOT ERROR.bconv6_Send THEN
+    ERROR.bconv6_Send_Count := ERROR.bconv6_Send_Count + 1;
+END_IF;
+ERROR.bConv6_Rec    := CONV6.oAlarm_Receive;
+ERROR.bConv6_Send   := CONV6.oAlarm_Send;
+
+// Conveyor 7
+CONV7   (   iButton_Index       := bConv7_index,
+            iButton_Call        := bConv7_Call,
+            iSelect_Fwd         := bConv7_Fwd_Rev,
+            iSelect_Rev         := NOT bConv7_Fwd_Rev,
+            iDHS                := DATA.bConv7_DHS,
+            iEStop              := DATA.EStop_Global,
+            
+            iPS2                := bConv7_PS2,
+            iProx_Stop_Home     := bConv7_Prox_Stop_Bottom,
+            iProx_Stop_Pos1     := bConv7_Prox_Stop_Top,
+            iProx_Slow_Home     := bConv7_Prox_Slow_Bottom,
+            iProx_Slow_Pos1     := bConv7_Prox_Slow_Top,
+            
+            iVSD_Fault_Rollers  := DATA.bConv7_Bottom_VSD_F,
+            iVSD_Fault_Aux1     := DATA.bConv7_Rollover_VSD_F,
+            iVSD_Fault_Aux2     := DATA.bConv7_Top_VSD_F,
+            
+            iNeigh_0            := CONV6.oNeigh_1,
+            iNeigh_2            := CONV8.oNeigh_0,
+
+            xSend_Pos           := 4,
+            xConv_Behav         := xSetting_Rollover7,
+            xAuto_Reset         := true
+        );
+bConv7_Bottom_Fwd   := CONV7.oMotor_Rollers_Fwd;
+bConv7_Bottom_Rev   := CONV7.oMotor_Rollers_Rev;
+bConv7_Rollovr_Fwd  := CONV7.oMotor_Aux1_Fwd;
+bConv7_Rollovr_Rev  := CONV7.oMotor_Aux1_Rev;
+bConv7_Rollovr_Fast := CONV7.oMotor_Aux1_Fast;
+bConv7_Top_Fwd      := CONV7.oMotor_Aux2_Fwd;
+bConv7_Top_Rev      := CONV7.oMotor_Aux2_Rev;
+bConv7_Ind_Green    := CONV7.oLamp_Indication;
+bConv7_Ind_Orange   := CONV7.oLamp_Warning;
+bConv7_Ind_Red      := CONV7.oLamp_Fault;
+
+IF conv7.oAlarm_Receive AND NOT ERROR.bconv7_Rec THEN
+    ERROR.bconv7_Rec_Count := ERROR.bconv7_Rec_Count + 1;
+END_IF;
+IF conv7.oAlarm_Send AND NOT ERROR.bconv7_Send THEN
+    ERROR.bconv7_Send_Count := ERROR.bconv7_Send_Count + 1;
+END_IF;
+ERROR.bConv7_Rec    := CONV7.oAlarm_Receive;
+ERROR.bConv7_Send   := CONV7.oAlarm_Send;
+
+// Conveyor 8
+CONV8   (   iButton_Index       := bConv8_index,
+            iButton_Call        := bConv8_Call,
+            iESTOP              := DATA.EStop_Global,
+            
+            iPS2                := bConv8_PS,
+            iProx_Stop_Home     := true,
+            
+            iVSD_Fault_Rollers  := DATA.bConv8_VSD_F,
+            
+            iNeigh_0            := CONV7.oNeigh_2,
+            iNeigh_1            := CONV9.oNeigh_0,
+            xCycle_Running      := bCycle_Start,
+            xSiren              := bSiren,
+
+            xSend_Pos           := 1,
+            xConv_Behav         := xLine_Behav,
+            xFixed_Cycle_Mode   := bConv8_Absent,
+            xSegment_Startpoint := true,
+            xAuto_Reset         := true,
+            xAuto_Start         := true
+        );
+bConv8_Fwd          := CONV8.oMotor_Rollers_Fwd;
+bConv8_Rev          := CONV8.oMotor_Rollers_Rev;
+bConv8_Ind_Green    := CONV8.oLamp_Indication;
+bConv8_Ind_Orange   := CONV8.oLamp_Warning;
+bConv8_Ind_Red      := CONV8.oLamp_Fault;
+
+IF conv8.oAlarm_Receive AND NOT ERROR.bconv8_Rec THEN
+    ERROR.bconv8_Rec_Count := ERROR.bconv8_Rec_Count + 1;
+END_IF;
+IF conv8.oAlarm_Send AND NOT ERROR.bconv8_Send THEN
+    ERROR.bconv8_Send_Count := ERROR.bconv8_Send_Count + 1;
+END_IF;
+ERROR.bConv8_Rec    := CONV8.oAlarm_Receive;
+ERROR.bConv8_Send   := CONV8.oAlarm_Send;
+
+// Conveyor 9
+CONV9   (   iButton_Index       := bConv9_index,
+            iButton_Call        := bConv9_Call,
+            iSelect_Fwd         := bConv9_Fwd_Rev,
+            iSelect_Rev         := NOT bConv9_Fwd_Rev,
+            iDHS                := DATA.bConv9_DHS,
+            iESTOP              := DATA.EStop_Global,
+                        
+            iPS2                := bConv9_PS,
+            iProx_Stop_Home     := bConv9_Prox_Home,
+            
+            iVSD_Fault_Rollers  := DATA.bConv9_VSD_F,
+            iVSD_Fault_Aux2     := DATA.bConv9_Tilt_VSD_F,
+            
+            iNeigh_0            := CONV8.oNeigh_1,
+            iNeigh_1            := CONV10.oNeigh_0,
+            xCycle_Running      := bCycle_Start,
+            xSiren              := bSiren,
+
+            xSend_Pos           := 1,
+            xConv_Behav         := xLine_Behav,
+            xFixed_Cycle_Mode   := bConv9_Absent,
+            xAuto_Reset         := true,
+            
+            xProxy_replace      := true
+        );
+bConv9_Fwd          := CONV9.oMotor_Rollers_Fwd;
+bConv9_Rev          := CONV9.oMotor_Rollers_Rev;
+bConv9_Tilt_Fwd     := CONV9.oMotor_Aux1_Fwd;
+bConv9_Tilt_Rev     := CONV9.oMotor_Aux1_Rev;
+bConv9_Ind_Green    := CONV9.oLamp_Indication;
+bConv9_Ind_Orange   := CONV9.oLamp_Warning;
+bConv9_Ind_Red      := CONV9.oLamp_Fault;
+
+IF conv9.oAlarm_Receive AND NOT ERROR.bconv9_Rec THEN
+    ERROR.bconv9_Rec_Count := ERROR.bconv9_Rec_Count + 1;
+END_IF;
+IF conv9.oAlarm_Send AND NOT ERROR.bconv9_Send THEN
+    ERROR.bconv9_Send_Count := ERROR.bconv9_Send_Count + 1;
+END_IF;
+ERROR.bConv9_Rec    := CONV9.oAlarm_Receive;
+ERROR.bConv9_Send   := CONV9.oAlarm_Send;
+
+// Conveyor 10
+CONV10  (   iButton_Index       := bConv10_index,
+            iButton_Call        := bConv10_Call,
+            iSelect_Fwd         := bConv10_Fwd_Rev,
+            iSelect_Rev         := NOT bConv10_Fwd_Rev,
+            iDHS                := DATA.bConv10_DHS,
+            iESTOP              := DATA.EStop_Global,
+            
+            iPS2                := bConv10_PS,
+            iProx_Stop_Home     := bConv10_Prox_Home,
+            
+            
+            iVSD_Fault_Rollers  := DATA.bConv10_VSD_F,
+            iVSD_Fault_Aux2     := DATA.bConv10_Tilt_VSD_F,
+            
+            iNeigh_0            := CONV9.oNeigh_1,
+            iNeigh_1            := CONV11.oNeigh_0,
+            xCycle_Running      := bCycle_Start,
+            xSiren              := bSiren,
+
+            xSend_Pos           := 1,
+            xConv_Behav         := xLine_Behav,
+            xFixed_Cycle_Mode   := bConv10_Absent,
+            xAuto_Reset         := true,
+            
+            xProxy_replace      := true
+        );
+bConv10_Fwd          := CONV10.oMotor_Rollers_Fwd;
+bConv10_Rev          := CONV10.oMotor_Rollers_Rev;
+bConv10_Tilt_Fwd     := CONV10.oMotor_Aux1_Fwd;
+bConv10_Tilt_Rev     := CONV10.oMotor_Aux1_Rev;
+bConv10_Ind_Green    := CONV10.oLamp_Indication;
+bConv10_Ind_Orange   := CONV10.oLamp_Warning;
+bConv10_Ind_Red      := CONV10.oLamp_Fault;
+
+IF conv10.oAlarm_Receive AND NOT ERROR.bconv10_Rec THEN
+    ERROR.bconv10_Rec_Count := ERROR.bconv10_Rec_Count + 1;
+END_IF;
+IF conv10.oAlarm_Send AND NOT ERROR.bconv10_Send THEN
+    ERROR.bconv10_Send_Count := ERROR.bconv10_Send_Count + 1;
+END_IF;
+ERROR.bConv10_Rec    := CONV10.oAlarm_Receive;
+ERROR.bConv10_Send   := CONV10.oAlarm_Send;
+
+// Conveyor 11
+CONV11  (   iButton_Index       := bConv11_index,
+            iButton_Call        := bConv11_Call,
+            iSelect_Fwd         := bConv11_Fwd_Rev,
+            iSelect_Rev         := NOT bConv11_Fwd_Rev,
+            iDHS                := DATA.bConv11_DHS,
+            iESTOP              := DATA.EStop_Global,
+            
+            iPS2                := bConv11_PS,
+            iProx_Stop_Home     := bConv11_Prox_Home,
+            
+            
+            iVSD_Fault_Rollers  := DATA.bConv11_VSD_F,
+            iVSD_Fault_Aux2     := DATA.bConv11_Tilt_VSD_F,
+            
+            iNeigh_0            := CONV10.oNeigh_1,
+            iNeigh_1            := CONV12.oNeigh_0,
+            xCycle_Running      := bCycle_Start,
+            xSiren              := bSiren,
+
+            xSend_Pos           := 1,
+            xConv_Behav         := xLine_Behav,
+            xFixed_Cycle_Mode   := bConv11_Absent,
+            xAuto_Reset         := true,
+            
+            xProxy_replace      := true
+        );
+bConv11_Fwd          := CONV11.oMotor_Rollers_Fwd;
+bConv11_Rev          := CONV11.oMotor_Rollers_Rev;
+bConv11_Tilt_Fwd     := CONV11.oMotor_Aux1_Fwd;
+bConv11_Tilt_Rev     := CONV11.oMotor_Aux1_Rev;
+bConv11_Ind_Green    := CONV11.oLamp_Indication;
+bConv11_Ind_Orange   := CONV11.oLamp_Warning;
+bConv11_Ind_Red      := CONV11.oLamp_Fault;
+
+IF conv11.oAlarm_Receive AND NOT ERROR.bconv11_Rec THEN
+    ERROR.bconv11_Rec_Count := ERROR.bconv11_Rec_Count + 1;
+END_IF;
+IF conv11.oAlarm_Send AND NOT ERROR.bconv11_Send THEN
+    ERROR.bconv11_Send_Count := ERROR.bconv11_Send_Count + 1;
+END_IF;
+ERROR.bConv11_Rec    := CONV11.oAlarm_Receive;
+ERROR.bConv11_Send   := CONV11.oAlarm_Send;
+
+IF bChange_13 THEN
+    xConv12_Setting := xSetting_M_TurnT;
+ELSE
+    xConv12_Setting := xLine_Behav;
+END_IF;
+// Conveyor 12
+CONV12  (   iButton_Index       := bConv12_index,
+            iButton_Call        := bConv12_Call,
+            iSelect_Fwd         := bConv12_Fwd_Rev,
+            iSelect_Rev         := NOT bConv12_Fwd_Rev,
+            iDHS                := DATA.bConv12_DHS,
+            iESTOP              := DATA.EStop_Global,
+            
+            iPS2                := bConv12_PS,
+            iProx_Stop_Home     := bConv12_Prox_Home,
+            
+            
+            iVSD_Fault_Rollers  := DATA.bConv12_VSD_F,
+            iVSD_Fault_Aux2     := DATA.bConv12_Tilt_VSD_F,
+            
+            iNeigh_0            := CONV11.oNeigh_1,
+            iNeigh_1            := CONV13.oNeigh_0,
+            xCycle_Running      := bCycle_Start,
+            xSiren              := bSiren,
+
+            xSend_Pos           := 1,
+            xConv_Behav         := xConv12_Setting,
+            xFixed_Cycle_Mode   := bConv12_Absent,
+            xAuto_Reset         := true,
+            
+            xProxy_replace      := true
+        );
+bConv12_Fwd          := CONV12.oMotor_Rollers_Fwd;
+bConv12_Rev          := CONV12.oMotor_Rollers_Rev;
+bConv12_Tilt_Fwd     := CONV12.oMotor_Aux1_Fwd;
+bConv12_Tilt_Rev     := CONV12.oMotor_Aux1_Rev;
+bConv12_Ind_Green    := CONV12.oLamp_Indication;
+bConv12_Ind_Orange   := CONV12.oLamp_Warning;
+bConv12_Ind_Red      := CONV12.oLamp_Fault;
+
+IF conv12.oAlarm_Receive AND NOT ERROR.bconv12_Rec THEN
+    ERROR.bconv12_Rec_Count := ERROR.bconv12_Rec_Count + 1;
+END_IF;
+IF conv12.oAlarm_Send AND NOT ERROR.bconv12_Send THEN
+    ERROR.bconv12_Send_Count := ERROR.bconv12_Send_Count + 1;
+END_IF;
+ERROR.bConv12_Rec    := CONV12.oAlarm_Receive;
+ERROR.bConv12_Send   := CONV12.oAlarm_Send;
+
+// Conveyor 13
+CONV13  (   iButton_Index       := bConv13_index,
+            iButton_Call        := bConv13_Call,
+            iSelect_Fwd         := bConv13_Fwd_Rev,
+            iSelect_Rev         := NOT bConv13_Fwd_Rev,
+            iDHS                := DATA.bConv13_DHS,
+            iEStop              := DATA.EStop_Global,
+            
+            iPS2                := bConv13_PS2,
+            iProx_Stop_Home     := bConv13_Prox_Stop_Bottom,
+            iProx_Stop_Pos1     := bConv13_Prox_Stop_Top,
+            iProx_Slow_Home     := bConv13_Prox_Slow_Bottom,
+            iProx_Slow_Pos1     := bConv13_Prox_Slow_Top,
+            
+            iVSD_Fault_Rollers  := DATA.bConv13_Bottom_VSD_F,
+            iVSD_Fault_Aux1     := DATA.bConv13_Rollover_VSD_F,
+            iVSD_Fault_Aux2     := DATA.bConv13_Top_VSD_F,
+            
+            iNeigh_0            := CONV12.oNeigh_1,
+            iNeigh_2            := CONV14.oNeigh_0,
+
+            xSend_Pos           := 4,
+            xConv_Behav         := xSetting_Rollover13,
+            xAuto_Reset         := true
+        );
+bConv13_Bottom_Fwd   := CONV13.oMotor_Rollers_Fwd;
+bConv13_Bottom_Rev   := CONV13.oMotor_Rollers_Rev;
+bConv13_Rollovr_Fwd  := CONV13.oMotor_Aux1_Fwd;
+bConv13_Rollovr_Rev  := CONV13.oMotor_Aux1_Rev;
+bConv13_Rollovr_Fast := CONV13.oMotor_Aux1_Fast;
+bConv13_Top_Fwd      := CONV13.oMotor_Aux2_Fwd;
+bConv13_Top_Rev      := CONV13.oMotor_Aux2_Rev;
+bConv13_Ind_Green    := CONV13.oLamp_Indication;
+bConv13_Ind_Orange   := CONV13.oLamp_Warning;
+bConv13_Ind_Red      := CONV13.oLamp_Fault;
+
+IF conv13.oAlarm_Receive AND NOT ERROR.bconv13_Rec THEN
+    ERROR.bconv13_Rec_Count := ERROR.bconv13_Rec_Count + 1;
+END_IF;
+IF conv13.oAlarm_Send AND NOT ERROR.bconv13_Send THEN
+    ERROR.bconv13_Send_Count := ERROR.bconv13_Send_Count + 1;
+END_IF;
+ERROR.bConv13_Rec    := CONV13.oAlarm_Receive;
+ERROR.bConv13_Send   := CONV13.oAlarm_Send;
+
+// Conveyor 14
+CONV14  (   iButton_Index       := bConv14_index,
+            iButton_Call        := bConv14_Call,
+            iSelect_Fwd         := bConv14_Fwd_Rev,
+            iSelect_Rev         := NOT bConv14_Fwd_Rev,
+            iDHS                := DATA.bConv14_DHS,
+            iESTOP              := DATA.EStop_Global,
+            
+            iPS2                := bConv14_PS2,
+            iProx_Stop_Home     := NOT bConv14_Prox_Stop_0,
+            iProx_Stop_Pos1     := NOT bConv14_Prox_Stop_90,
+            iProx_Slow_Home     := NOT bConv14_Prox_Slow_0,
+            iProx_Slow_Pos1     := NOT bConv14_Prox_Slow_90,
+            
+            iVSD_Fault_Rollers  := DATA.bConv14_VSD_F,
+            iVSD_Fault_Aux1     := DATA.bConv14_Turn_VSD_F,
+
+            iNeigh_0            := CONV13.oNeigh_2,
+            iNeigh_2            := CONV15.oNeigh_0,
+            xCycle_Running      := bCycle_Start,
+            xSiren              := bSiren,
+            
+            xSend_Pos           := 2,
+            xConv_Behav         := xLine_Behav,
+            xAuto_Reset         := true,
+            xSegment_Startpoint := true,
+            
+            xSensor_Delay       := t#1000ms,
+            xProxy_replace      := true
+        );
+bConv14_Fwd          := CONV14.oMotor_Rollers_Fwd;
+bConv14_Rev          := CONV14.oMotor_Rollers_Rev;
+bConv14_Turn_Fwd     := CONV14.oMotor_Aux1_Fwd;
+bConv14_Turn_Rev     := CONV14.oMotor_Aux1_Rev;
+bConv14_Turn_Fast    := CONV14.oMotor_Aux1_Fast;
+bConv14_Ind_Green    := CONV14.oLamp_Indication;
+bConv14_Ind_Orange   := CONV14.oLamp_Warning;
+bConv14_Ind_Red      := CONV14.oLamp_Fault;
+
+(* PISTON *)
+IF ((CONV14.State = 5) AND NOT (CONV14.iProx_Stop_Pos1)) OR (CONV14.State = 7) THEN
+    bConv14_Turn_Lock := false;
+END_IF;
+IF (CONV14.State = 1) OR (CONV14.State = 8) THEN
+    bConv14_Turn_Lock := true;
+END_IF;
+
+IF conv14.oAlarm_Receive AND NOT ERROR.bconv14_Rec THEN
+    ERROR.bconv14_Rec_Count := ERROR.bconv14_Rec_Count + 1;
+END_IF;
+IF conv14.oAlarm_Send AND NOT ERROR.bconv14_Send THEN
+    ERROR.bconv14_Send_Count := ERROR.bconv14_Send_Count + 1;
+END_IF;
+ERROR.bConv14_Rec    := CONV14.oAlarm_Receive;
+ERROR.bConv14_Send   := CONV14.oAlarm_Send;
+
+// Conveyor 15
+CONV15  (   iButton_Index       := bConv15_index,
+            iButton_Call        := bConv15_Call,
+            iESTOP              := DATA.EStop_Global,
+            
+            iPS2                := bConv15_PS,
+            iProx_Stop_Home     := true,
+            
+            iVSD_Fault_Rollers  := DATA.bConv15_VSD_F,
+            
+            iNeigh_0            := CONV14.oNeigh_2,
+            iNeigh_1            := CONV16.oNeigh_0,
+            xCycle_Running      := bCycle_Start,
+            xSiren              := bSiren,
+
+            xSend_Pos           := 1,
+            xConv_Behav         := xLine_Behav,
+            xFixed_Cycle_Mode   := bConv15_Absent,
+            xAuto_Reset         := true,
+            xSensor_Delay       := t#1000ms,
+            xProxy_replace      := true
+        );
+bConv15_Fwd         := CONV15.oMotor_Rollers_Fwd;
+bConv15_Rev         := CONV15.oMotor_Rollers_Rev;
+bConv15_Ind_Green    := CONV15.oLamp_Indication;
+bConv15_Ind_Orange   := CONV15.oLamp_Warning;
+bConv15_Ind_Red      := CONV15.oLamp_Fault;
+
+IF conv15.oAlarm_Receive AND NOT ERROR.bconv15_Rec THEN
+    ERROR.bconv15_Rec_Count := ERROR.bconv15_Rec_Count + 1;
+END_IF;
+IF conv15.oAlarm_Send AND NOT ERROR.bconv15_Send THEN
+    ERROR.bconv15_Send_Count := ERROR.bconv15_Send_Count + 1;
+END_IF;
+ERROR.bConv15_Rec    := CONV15.oAlarm_Receive;
+ERROR.bConv15_Send   := CONV15.oAlarm_Send;
+
+// Conveyor 16
+CONV16  (   iButton_Index       := bConv16_index,
+            iButton_Call        := bConv16_Call,
+            iESTOP              := DATA.EStop_Global,
+            
+            iPS2                := bConv16_PS,
+            iProx_Stop_Home     := true,
+            
+            iVSD_Fault_Rollers  := DATA.bConv16_VSD_F,
+            
+            iNeigh_0            := CONV15.oNeigh_1,
+            iNeigh_1            := CONV17.oNeigh_0,
+            xCycle_Running      := bCycle_Start,
+            xSiren              := bSiren,
+
+            xSend_Pos           := 1,
+            xConv_Behav         := xLine_Behav,
+            xFixed_Cycle_Mode   := bConv16_Absent,
+            xAuto_Reset         := true,
+            
+            xSensor_Delay       := t#1000ms,
+            xProxy_replace      := true
+        );
+bConv16_Fwd         := CONV16.oMotor_Rollers_Fwd;
+bConv16_Rev         := CONV16.oMotor_Rollers_Rev;
+bConv16_Ind_Green    := CONV16.oLamp_Indication;
+bConv16_Ind_Orange   := CONV16.oLamp_Warning;
+bConv16_Ind_Red      := CONV16.oLamp_Fault;
+
+IF conv16.oAlarm_Receive AND NOT ERROR.bconv16_Rec THEN
+    ERROR.bconv16_Rec_Count := ERROR.bconv16_Rec_Count + 1;
+END_IF;
+IF conv16.oAlarm_Send AND NOT ERROR.bconv16_Send THEN
+    ERROR.bconv16_Send_Count := ERROR.bconv16_Send_Count + 1;
+END_IF;
+ERROR.bConv16_Rec    := CONV16.oAlarm_Receive;
+ERROR.bConv16_Send   := CONV16.oAlarm_Send;
+
+// Conveyor 17
+CONV17  (   iButton_Index       := bConv17_index,
+            iButton_Call        := bConv17_Call,
+            iSelect_Fwd         := bConv17_Fwd_Rev,
+            iSelect_Rev         := NOT bConv17_Fwd_Rev,
+            iDHS                := DATA.bConv17_DHS,
+            iESTOP              := DATA.EStop_Global,
+            
+            iPS2                := bConv17_PS2,
+            iProx_Stop_Home     := NOT bConv17_Prox_Stop_0,
+            iProx_Stop_Pos1     := NOT bConv17_Prox_Stop_90,
+            iProx_Slow_Home     := NOT bConv17_Prox_Slow_0,
+            iProx_Slow_Pos1     := NOT bConv17_Prox_Slow_90,
+            
+            iVSD_Fault_Rollers  := DATA.bConv17_VSD_F,
+            iVSD_Fault_Aux1     := DATA.bConv17_Turn_VSD_F,
+
+            iNeigh_0            := CONV16.oNeigh_1,
+            iNeigh_2            := CONV18.oNeigh_0,
+            xCycle_Running      := bCycle_Start,
+            xSiren              := bSiren,
+            
+            xSend_Pos           := 2,
+            xConv_Behav         := xSetting_M_TurnT,
+            xAuto_Reset         := true,
+            xSensor_Delay       := t#1000ms,
+            xProxy_replace      := true
+        );
+bConv17_Fwd          := CONV17.oMotor_Rollers_Fwd;
+bConv17_Rev          := CONV17.oMotor_Rollers_Rev;
+bConv17_Turn_Fwd     := CONV17.oMotor_Aux1_Fwd;
+bConv17_Turn_Rev     := CONV17.oMotor_Aux1_Rev;
+bConv17_Turn_Fast    := CONV17.oMotor_Aux1_Fast;
+bConv17_Ind_Green    := CONV17.oLamp_Indication;
+bConv17_Ind_Orange   := CONV17.oLamp_Warning;
+bConv17_Ind_Red      := CONV17.oLamp_Fault;
+
+(* PISTON *)
+IF ((CONV17.State = 5) AND NOT (CONV17.iProx_Stop_Pos1)) OR (CONV17.State = 7) THEN
+    bConv17_Turn_Lock := false;
+END_IF;
+IF (CONV17.State = 1) OR (CONV17.State = 8) THEN
+    bConv17_Turn_Lock := true;
+END_IF;
+
+IF conv17.oAlarm_Receive AND NOT ERROR.bconv17_Rec THEN
+    ERROR.bconv17_Rec_Count := ERROR.bconv17_Rec_Count + 1;
+END_IF;
+IF conv17.oAlarm_Send AND NOT ERROR.bconv17_Send THEN
+    ERROR.bconv17_Send_Count := ERROR.bconv17_Send_Count + 1;
+END_IF;
+ERROR.bConv17_Rec    := CONV17.oAlarm_Receive;
+ERROR.bConv17_Send   := CONV17.oAlarm_Send;
+
+// Conveyor 18
+CONV18  (   iButton_Index       := bConv18_index,
+            iButton_Call        := bConv18_Call,
+            iESTOP              := DATA.EStop_Global,
+            
+            iPS2                := bConv18_PS,
+            iProx_Stop_Home     := true,
+            
+            iVSD_Fault_Rollers  := DATA.bConv18_VSD_F,
+            
+            iNeigh_0            := CONV17.oNeigh_2,
+            iNeigh_1            := CONV19.oNeigh_0,
+            xCycle_Running      := bCycle_Start,
+            xSiren              := bSiren,
+
+            xSend_Pos           := 1,
+            xConv_Behav         := xLine_Behav,
+            xFixed_Cycle_Mode   := bConv18_Absent,
+            xSegment_Startpoint := true,
+            xAuto_Reset         := true,
+            xSensor_Delay       := t#1000ms,
+            xProxy_replace      := true
+        );
+bConv18_Fwd         := CONV18.oMotor_Rollers_Fwd;
+bConv18_Rev         := CONV18.oMotor_Rollers_Rev;
+bConv18_Ind_Green    := CONV18.oLamp_Indication;
+bConv18_Ind_Orange   := CONV18.oLamp_Warning;
+bConv18_Ind_Red      := CONV18.oLamp_Fault;
+
+IF conv18.oAlarm_Receive AND NOT ERROR.bconv18_Rec THEN
+    ERROR.bconv18_Rec_Count := ERROR.bconv18_Rec_Count + 1;
+END_IF;
+IF conv18.oAlarm_Send AND NOT ERROR.bconv18_Send THEN
+    ERROR.bconv18_Send_Count := ERROR.bconv18_Send_Count + 1;
+END_IF;
+ERROR.bConv18_Rec    := CONV18.oAlarm_Receive;
+ERROR.bConv18_Send   := CONV18.oAlarm_Send;
+
+// Conveyor 19
+CONV19  (   iButton_Index       := bConv19_index,
+            iButton_Call        := bConv19_Call,
+            iESTOP              := DATA.EStop_Global,
+            
+            iPS2                := bConv19_PS,
+            iProx_Stop_Home     := true,
+            
+            iVSD_Fault_Rollers  := DATA.bConv19_VSD_F,
+            
+            iNeigh_0            := CONV18.oNeigh_1,
+            iNeigh_1            := CONV20.oNeigh_0,
+            xCycle_Running      := bCycle_Start,
+            xSiren              := bSiren,
+
+            xSend_Pos           := 1,
+            xConv_Behav         := xLine_Behav,
+            xFixed_Cycle_Mode   := bConv19_Absent,
+            xAuto_Reset         := true,
+            xSensor_Delay       := t#1000ms,
+            xProxy_replace      := true
+        );
+bConv19_Fwd          := CONV19.oMotor_Rollers_Fwd;
+bConv19_Rev          := CONV19.oMotor_Rollers_Rev;
+bConv19_Ind_Green    := CONV19.oLamp_Indication;
+bConv19_Ind_Orange   := CONV19.oLamp_Warning;
+bConv19_Ind_Red      := CONV19.oLamp_Fault;
+
+IF conv19.oAlarm_Receive AND NOT ERROR.bconv19_Rec THEN
+    ERROR.bconv19_Rec_Count := ERROR.bconv19_Rec_Count + 1;
+END_IF;
+IF conv19.oAlarm_Send AND NOT ERROR.bconv19_Send THEN
+    ERROR.bconv19_Send_Count := ERROR.bconv19_Send_Count + 1;
+END_IF;
+ERROR.bConv19_Rec    := CONV19.oAlarm_Receive;
+ERROR.bConv19_Send   := CONV19.oAlarm_Send;
+
+// Conveyor 20
+CONV20  (   iButton_Index       := bConv20_index,
+            iButton_Call        := bConv20_Call,
+            iSelect_Fwd         := bConv20_Fwd_Rev,
+            iSelect_Rev         := NOT bConv20_Fwd_Rev,
+            iDHS                := DATA.bConv20_DHS,
+            iEStop              := DATA.EStop_Global,
+            
+            iPS2                := bConv20_PS2,
+            iProx_Stop_Home     := bConv20_Prox_Stop_Bottom,
+            //iProx_Stop_Home     := true,
+            iProx_Stop_Pos1     := bConv20_Prox_Stop_Top,
+            iProx_Slow_Home     := bConv20_Prox_Slow_Bottom,
+            iProx_Slow_Pos1     := bConv20_Prox_Slow_Top,
+            
+            iVSD_Fault_Rollers  := DATA.bConv20_VSD_F,
+            iVSD_Fault_Aux1     := DATA.bConv20_Rollover_VSD_F,
+            
+            iNeigh_0            := CONV19.oNeigh_1,
+            iNeigh_1            := CONV21.oNeigh_0,
+            xCycle_Running      := bCycle_Start,
+            xSiren              := bSiren,
+
+            xSend_Pos           := 1,
+            xConv_Behav         := xLine_Behav,
+            xFixed_Cycle_Mode   := bConv20_Absent,
+            xAuto_Reset         := true
+        );
+bConv20_Fwd          := CONV20.oMotor_Rollers_Fwd;
+bConv20_Rev          := CONV20.oMotor_Rollers_Rev;
+bConv20_Rollovr_Fwd  := CONV20.oMotor_Aux1_Fwd;
+bConv20_Rollovr_Rev  := CONV20.oMotor_Aux1_Rev;
+bConv20_Rollovr_Fast := CONV20.oMotor_Aux1_Fast;
+bConv20_Ind_Green    := CONV20.oLamp_Indication;
+bConv20_Ind_Orange   := CONV20.oLamp_Warning;
+bConv20_Ind_Red      := CONV20.oLamp_Fault;
+IF (CONV20.State = 5) OR (CONV20.State = 7) THEN
+    bConv20_Rollovr_Lock := true;
+END_IF;
+IF (CONV20.State = 1) OR (CONV20.State = 8) THEN
+    bConv20_Rollovr_Lock := false;
+END_IF;
+
+IF conv20.oAlarm_Receive AND NOT ERROR.bconv20_Rec THEN
+    ERROR.bconv20_Rec_Count := ERROR.bconv20_Rec_Count + 1;
+END_IF;
+IF conv20.oAlarm_Send AND NOT ERROR.bconv20_Send THEN
+    ERROR.bconv20_Send_Count := ERROR.bconv20_Send_Count + 1;
+END_IF;
+ERROR.bConv20_Rec    := CONV20.oAlarm_Receive;
+ERROR.bConv20_Send   := CONV20.oAlarm_Send;
+
+// Conveyor 21
+CONV21  (   iButton_Index       := bConv21_index,
+            iButton_Call        := bConv21_Call,
+            iESTOP              := DATA.EStop_Global,
+            
+            iPS2                := bConv21_PS,
+            iProx_Stop_Home     := true,
+            
+            iVSD_Fault_Rollers  := DATA.bConv21_VSD_F,
+            
+            iNeigh_0            := CONV20.oNeigh_1,
+            iNeigh_1            := CONV22.oNeigh_0,
+            xCycle_Running      := bCycle_Start,
+            xSiren              := bSiren,
+
+            xSend_Pos           := 1,
+            xConv_Behav         := xLine_Behav,
+            xFixed_Cycle_Mode   := bConv21_Absent,
+            xAuto_Reset         := true,
+            
+            xSensor_Delay       := t#1000ms,
+            xProxy_replace      := true
+        );
+bConv21_Fwd          := CONV21.oMotor_Rollers_Fwd;
+bConv21_Rev          := CONV21.oMotor_Rollers_Rev;
+bConv21_Ind_Green    := CONV21.oLamp_Indication;
+bConv21_Ind_Orange   := CONV21.oLamp_Warning;
+bConv21_Ind_Red      := CONV21.oLamp_Fault;
+
+IF conv21.oAlarm_Receive AND NOT ERROR.bconv21_Rec THEN
+    ERROR.bconv21_Rec_Count := ERROR.bconv21_Rec_Count + 1;
+END_IF;
+IF conv21.oAlarm_Send AND NOT ERROR.bconv21_Send THEN
+    ERROR.bconv21_Send_Count := ERROR.bconv21_Send_Count + 1;
+END_IF;
+ERROR.bConv21_Rec    := CONV21.oAlarm_Receive;
+ERROR.bConv21_Send   := CONV21.oAlarm_Send;
+
+// Conveyor 22
+CONV22  (   iButton_Index       := bConv22_index,
+            iButton_Call        := bConv22_Call,
+            iSelect_Fwd         := bConv22_Fwd_Rev,
+            iSelect_Rev         := NOT bConv22_Fwd_Rev,
+            iDHS                := DATA.bConv22_DHS,
+            iEStop              := DATA.EStop_Global,
+            
+            iPS2                := bConv22_PS2,
+            iProx_Stop_Home     := NOT bConv22_Prox_Stop_0,
+            iProx_Stop_Pos1     := NOT bConv22_Prox_Stop_90,
+            iProx_Stop_Pos2     := NOT bConv22_Prox_Stop_180,
+            iProx_Slow_Home     := NOT bConv22_Prox_Slow_0,
+            //iProx_Slow_Pos1     := NOT bConv22_Prox_Slow_90,
+            iProx_Slow_Pos2     := NOT bConv22_Prox_Slow_180,
+            
+            iVSD_Fault_Rollers  := DATA.bConv22_VSD_F,
+            iVSD_Fault_Aux1     := DATA.bConv22_Turn_VSD_F,
+            
+            iNeigh_0            := CONV21.oNeigh_1,
+            iNeigh_3            := CONV23.oNeigh_0,
+
+            xSend_Pos           := 5,
+            xConv_Behav         := xSetting_M_TurnT,
+            xAuto_Reset         := true,
+            
+            xSensor_Delay       := t#1000ms,
+            xProxy_replace      := true
+        );
+bConv22_Fwd          := CONV22.oMotor_Rollers_Fwd AND (NOT bConv22_Prox_Stop_0 XOR NOT bConv22_Prox_Stop_180);
+bConv22_Rev          := CONV22.oMotor_Rollers_Rev AND (NOT bConv22_Prox_Stop_0 XOR NOT bConv22_Prox_Stop_180);
+bConv22_Turn_Fwd     := CONV22.oMotor_Aux1_Fwd;
+bConv22_Turn_Rev     := CONV22.oMotor_Aux1_Rev;
+bConv22_Turn_Fast    := CONV22.oMotor_Aux1_Fast;
+bConv22_Ind_Green    := CONV22.oLamp_Indication;
+bConv22_Ind_Orange   := CONV22.oLamp_Warning;
+bConv22_Ind_Red      := CONV22.oLamp_Fault;
+
+(* PISTON *)
+IF ((CONV22.State = 5) AND NOT (CONV22.iProx_Stop_Pos2)) OR (CONV22.State = 7) THEN
+    bConv22_Turn_Lock := false; // UP
+END_IF;
+IF (CONV22.State = 1) OR (CONV22.State = 8) THEN
+    bConv22_Turn_Lock := true;  // DOWN
+END_IF;
+
+
+IF conv22.oAlarm_Receive AND NOT ERROR.bconv22_Rec THEN
+    ERROR.bconv22_Rec_Count := ERROR.bconv22_Rec_Count + 1;
+END_IF;
+IF conv22.oAlarm_Send AND NOT ERROR.bconv22_Send THEN
+    ERROR.bconv22_Send_Count := ERROR.bconv22_Send_Count + 1;
+END_IF;
+ERROR.bConv22_Rec    := CONV22.oAlarm_Receive;
+ERROR.bConv22_Send   := CONV22.oAlarm_Send;
+
+// Conveyor 23
+CONV23  (   iButton_Index       := bConv23_index,
+            iButton_Call        := bConv23_Call,
+            iESTOP              := DATA.EStop_Global,
+            
+            iPS2                := bConv23_PS,
+            iProx_Stop_Home     := true,
+            
+            iVSD_Fault_Rollers  := DATA.bConv23_VSD_F,
+            
+            iNeigh_0            := CONV22.oNeigh_3,
+            iNeigh_1            := CONV24.oNeigh_0,
+            xCycle_Running      := bCycle_Start,
+            xSiren              := bSiren,
+
+            xSend_Pos           := 1,
+            xConv_Behav         := xLine_Behav,
+            xFixed_Cycle_Mode   := bConv23_Absent,
+            xSegment_Startpoint := true,
+            xAuto_Reset         := true,
+            
+            xSensor_Delay       := t#1000ms,
+            xProxy_replace      := true
+        );
+bConv23_Fwd          := CONV23.oMotor_Rollers_Fwd;
+bConv23_Rev          := CONV23.oMotor_Rollers_Rev;
+bConv23_Ind_Green    := CONV23.oLamp_Indication;
+bConv23_Ind_Orange   := CONV23.oLamp_Warning;
+bConv23_Ind_Red      := CONV23.oLamp_Fault;
+
+IF conv23.oAlarm_Receive AND NOT ERROR.bconv23_Rec THEN
+    ERROR.bconv23_Rec_Count := ERROR.bconv23_Rec_Count + 1;
+END_IF;
+IF conv23.oAlarm_Send AND NOT ERROR.bconv23_Send THEN
+    ERROR.bconv23_Send_Count := ERROR.bconv23_Send_Count + 1;
+END_IF;
+ERROR.bConv23_Rec    := CONV23.oAlarm_Receive;
+ERROR.bConv23_Send   := CONV23.oAlarm_Send;
+
+// Conveyor 24
+CONV24  (   iButton_Index       := bConv24_index,
+            iButton_Call        := bConv24_Call,
+            iESTOP              := DATA.EStop_Global,
+            
+            iPS2                := bConv24_PS,
+            iProx_Stop_Home     := true,
+            
+            iVSD_Fault_Rollers  := DATA.bConv24_VSD_F,
+            
+            iNeigh_0            := CONV23.oNeigh_1,
+            iNeigh_1            := CONV25.oNeigh_0,
+            xCycle_Running      := bCycle_Start,
+            xSiren              := bSiren,
+
+            xSend_Pos           := 1,
+            xConv_Behav         := xLine_Behav,
+            xFixed_Cycle_Mode   := bConv24_Absent,
+            xAuto_Reset         := true,
+            
+            xSensor_Delay       := t#1000ms,
+            xProxy_replace      := true
+        );
+bConv24_Fwd          := CONV24.oMotor_Rollers_Fwd;
+bConv24_Rev          := CONV24.oMotor_Rollers_Rev;
+bConv24_Ind_Green    := CONV24.oLamp_Indication;
+bConv24_Ind_Orange   := CONV24.oLamp_Warning;
+bConv24_Ind_Red      := CONV24.oLamp_Fault;
+
+IF conv24.oAlarm_Receive AND NOT ERROR.bconv24_Rec THEN
+    ERROR.bconv24_Rec_Count := ERROR.bconv24_Rec_Count + 1;
+END_IF;
+IF conv24.oAlarm_Send AND NOT ERROR.bconv24_Send THEN
+    ERROR.bconv24_Send_Count := ERROR.bconv24_Send_Count + 1;
+END_IF;
+ERROR.bConv24_Rec    := CONV24.oAlarm_Receive;
+ERROR.bConv24_Send   := CONV24.oAlarm_Send;
+
+// Conveyor 25
+CONV25  (   iButton_Index       := bConv25_index,
+            iButton_Call        := bConv25_Call,
+            iESTOP              := DATA.EStop_Global,
+            
+            iPS2                := bConv25_PS,
+            iProx_Stop_Home     := true,
+            
+            iVSD_Fault_Rollers  := DATA.bConv25_VSD_F,
+            
+            iNeigh_0            := CONV24.oNeigh_1,
+            iNeigh_1            := CONV26.oNeigh_0,
+            xCycle_Running      := bCycle_Start,
+            xSiren              := bSiren,
+
+            xSend_Pos           := 1,
+            xConv_Behav         := xLine_Behav,
+            xFixed_Cycle_Mode   := bConv25_Absent,
+            xAuto_Reset         := true,
+            
+            xSensor_Delay       := t#1000ms,
+            xProxy_replace      := true
+        );
+bConv25_Fwd          := CONV25.oMotor_Rollers_Fwd;
+bConv25_Rev          := CONV25.oMotor_Rollers_Rev;
+bConv25_Ind_Green    := CONV25.oLamp_Indication;
+bConv25_Ind_Orange   := CONV25.oLamp_Warning;
+bConv25_Ind_Red      := CONV25.oLamp_Fault;
+
+IF conv25.oAlarm_Receive AND NOT ERROR.bconv25_Rec THEN
+    ERROR.bconv25_Rec_Count := ERROR.bconv25_Rec_Count + 1;
+END_IF;
+IF conv25.oAlarm_Send AND NOT ERROR.bconv25_Send THEN
+    ERROR.bconv25_Send_Count := ERROR.bconv25_Send_Count + 1;
+END_IF;
+ERROR.bConv25_Rec    := CONV25.oAlarm_Receive;
+ERROR.bConv25_Send   := CONV25.oAlarm_Send;
+
+// Conveyor 26
+CONV26  (   iButton_Index       := bConv26_index,
+            iButton_Call        := bConv26_Call,
+            iESTOP              := DATA.EStop_Global,
+            
+            iPS2                := bConv26_PS,
+            iProx_Stop_Home     := true,
+            
+            iVSD_Fault_Rollers  := DATA.bConv26_VSD_F,
+            
+            iNeigh_0            := CONV25.oNeigh_1,
+            iNeigh_1            := CONV27.oNeigh_1,
+            xCycle_Running      := bCycle_Start,
+            xSiren              := bSiren,
+
+            xSend_Pos           := 1,
+            xConv_Behav         := xLine_Behav,
+            xFixed_Cycle_Mode   := bConv26_Absent,
+            xAuto_Reset         := true,
+            
+            xSensor_Delay       := t#1000ms,
+            xProxy_replace      := true
+        );
+bConv26_Fwd          := CONV26.oMotor_Rollers_Fwd;
+bConv26_Rev          := CONV26.oMotor_Rollers_Rev;
+bConv26_Ind_Green    := CONV26.oLamp_Indication;
+bConv26_Ind_Orange   := CONV26.oLamp_Warning;
+bConv26_Ind_Red      := CONV26.oLamp_Fault;
+
+IF conv26.oAlarm_Receive AND NOT ERROR.bconv26_Rec THEN
+    ERROR.bconv26_Rec_Count := ERROR.bconv26_Rec_Count + 1;
+END_IF;
+IF conv26.oAlarm_Send AND NOT ERROR.bconv26_Send THEN
+    ERROR.bconv26_Send_Count := ERROR.bconv26_Send_Count + 1;
+END_IF;
+ERROR.bConv26_Rec    := CONV26.oAlarm_Receive;
+ERROR.bConv26_Send   := CONV26.oAlarm_Send;
+
+// Conveyor 27 - Blowoff Station
+CONV27  (   iButton_Index       := bConv27_index,
+            iButton_Aux         := bConv27_Call,
+            iButton_EStop       := DATA.bConv27_EStop,
+            iEStop_Global       := DATA.EStop_Global,
+            iPS                 := bConv27_PS2,
+            iVSD_Rollers_Ready  := NOT DATA.bConv27_VSD_F,
+            iClock              := M0.5,
+            
+            F_Piston_Large_Hor      := bConv27_V3_Up,
+            F_Piston_Large_Ver      := bConv27_V4_Down,
+            F_Edge_Clamp_Released   := bConv27_V1_Released,
+            F_Edge_Clamp_Up         := bConv27_V1_Clamped,
+            F_Piston_Lock_Unlocked  := bConv27_V2_Released,
+            F_Piston_Lock_Locked    := bConv27_V2_Locked,
+            F_Piston_TC_Locked      := bConv27_TC1_Clamped OR bConv27_TC2_Clamped,
+            F_Piston_TC_Released    := bConv27_TC1_Released OR bConv27_TC2_Released,
+            
+            iNeigh_1            := CONV26.oNeigh_1,
+            iNeigh_2            := CONV28.oNeigh_0,
+            
+            xConv_Behav         := xSetting_Blowoff,
+            xSkip_Tilt          := bBlowStation_Skip,
+            xWorker_Absent      := true
+        );
+bConv27_Fwd         := CONV27.oMotor_Rollers_Fwd;
+bConv27_Rev         := CONV27.oMotor_Rollers_Rev;
+bConv27_Ind_Green   := CONV27.oLamp_Indication;
+bConv27_Ind_Orange  := CONV27.oLamp_Warning;
+bConv27_Ind_Red     := CONV27.oLamp_Fault;
+bConv27_Valve1      := CONV27.Piston_Edge_Clamp;
+bConv27_Valve2      := CONV27.Piston_Lock;
+bConv27_Valve3      := CONV27.Piston_Large_Down;
+bConv27_Valve4      := CONV27.Piston_Large_Up;
+bConv27_Valve5      := CONV27.Blower_Activate1;
+bConv27_Valve6      := CONV27.Blower_Turn;
+bConv27_Valve7      := CONV27.Piston_Top_Clamp;
+bConv27_Valve8      := CONV27.Blower_Activate2;
+
+// Conveyor 28
+CONV28  (   iButton_Index       := bConv28_index,
+            iButton_Call        := bConv28_Call,
+            iESTOP              := DATA.EStop_Global,
+            
+            iPS2                := bConv28_PS,
+            iProx_Stop_Home     := true,
+            
+            iVSD_Fault_Rollers  := DATA.bConv28_VSD_F,
+            
+            iNeigh_0            := CONV27.oNeigh_2,
+            iNeigh_1            := CONV29.oNeigh_0,
+            xCycle_Running      := bCycle_Start,
+            xSiren              := bSiren,
+
+            xSend_Pos           := 1,
+            xConv_Behav         := xLine_Behav,
+            xFixed_Cycle_Mode   := bConv28_Absent,
+            xAuto_Reset         := true,
+            xSensor_Delay       := t#1000ms,
+            xProxy_replace      := true
+        );
+bConv28_Fwd          := CONV28.oMotor_Rollers_Fwd;
+bConv28_Rev          := CONV28.oMotor_Rollers_Rev;
+bConv28_Ind_Green    := CONV28.oLamp_Indication;
+bConv28_Ind_Orange   := CONV28.oLamp_Warning;
+bConv28_Ind_Red      := CONV28.oLamp_Fault;
+
+IF conv28.oAlarm_Receive AND NOT ERROR.bconv28_Rec THEN
+    ERROR.bconv28_Rec_Count := ERROR.bconv28_Rec_Count + 1;
+END_IF;
+IF conv28.oAlarm_Send AND NOT ERROR.bconv28_Send THEN
+    ERROR.bconv28_Send_Count := ERROR.bconv28_Send_Count + 1;
+END_IF;
+ERROR.bConv28_Rec    := CONV28.oAlarm_Receive;
+ERROR.bConv28_Send   := CONV28.oAlarm_Send;
+
+// Conveyor 29
+CONV29  (   iButton_Index       := bConv29_index,
+            iButton_Call        := bConv29_Call,
+            iESTOP              := DATA.EStop_Global,
+            
+            iPS2                := bConv29_PS,
+            iProx_Stop_Home     := true,
+            
+            iVSD_Fault_Rollers  := DATA.bConv29_VSD_F,
+            
+            iNeigh_0            := CONV28.oNeigh_1,
+            iNeigh_1            := CONV30.oNeigh_0,
+            xCycle_Running      := bCycle_Start,
+            xSiren              := bSiren,
+
+            xSend_Pos           := 1,
+            xConv_Behav         := xLine_Behav,
+            xFixed_Cycle_Mode   := bConv29_Absent,
+            xAuto_Reset         := true,
+            xSensor_Delay       := t#1000ms,
+            xProxy_replace      := true
+        );
+bConv29_Fwd          := CONV29.oMotor_Rollers_Fwd;
+bConv29_Rev          := CONV29.oMotor_Rollers_Rev;
+bConv29_Ind_Green    := CONV29.oLamp_Indication;
+bConv29_Ind_Orange   := CONV29.oLamp_Warning;
+bConv29_Ind_Red      := CONV29.oLamp_Fault;
+
+IF conv29.oAlarm_Receive AND NOT ERROR.bconv29_Rec THEN
+    ERROR.bconv29_Rec_Count := ERROR.bconv29_Rec_Count + 1;
+END_IF;
+IF conv29.oAlarm_Send AND NOT ERROR.bconv29_Send THEN
+    ERROR.bconv29_Send_Count := ERROR.bconv29_Send_Count + 1;
+END_IF;
+ERROR.bConv29_Rec    := CONV29.oAlarm_Receive;
+ERROR.bConv29_Send   := CONV29.oAlarm_Send;
+
+// Conveyor 30
+CONV30  (   iButton_Index       := bConv30_index,
+            iButton_Call        := bConv30_Call,
+            iSelect_Fwd         := bConv30_Fwd_Rev,
+            iSelect_Rev         := NOT bConv30_Fwd_Rev,
+            iDHS                := DATA.bConv30_DHS,
+            iEStop              := DATA.EStop_Global,
+            
+            iPS2                := bConv30_PS2,
+            iProx_Stop_Home     := NOT bConv30_Prox_Stop_0,
+            iProx_Stop_Pos1     := NOT bConv30_Prox_Stop_90,
+            iProx_Slow_Home     := NOT bConv30_Prox_Slow_0,
+            iProx_Slow_Pos1     := NOT bConv30_Prox_Slow_90,
+            
+            iVSD_Fault_Rollers  := DATA.bConv30_VSD_F,
+            iVSD_Fault_Aux1     := DATA.bConv30_Turn_VSD_F,
+            
+            iNeigh_0            := CONV29.oNeigh_1,
+            iNeigh_1            := CONV31.oNeigh_0,
+            xCycle_Running      := bCycle_Start,
+            xSiren              := bSiren,
+
+            xSend_Pos           := 1,
+            xConv_Behav         := xLine_Behav,
+            xFixed_Cycle_Mode   := bConv30_Absent,
+            xAuto_Reset         := true,
+            xSensor_Delay       := t#1000ms,
+            xProxy_replace      := true
+        );
+bConv30_Fwd          := CONV30.oMotor_Rollers_Fwd AND NOT bConv30_Prox_Stop_0 AND bConv30_Prox_Stop_90; // Extra measure after product fell off
+bConv30_Rev          := CONV30.oMotor_Rollers_Rev AND NOT bConv30_Prox_Stop_0 AND bConv30_Prox_Stop_90;
+bConv30_Turn_Fwd     := CONV30.oMotor_Aux1_Fwd;
+bConv30_Turn_Rev     := CONV30.oMotor_Aux1_Rev;
+bConv30_Turn_Fast    := CONV30.oMotor_Aux1_Fast;
+bConv30_Ind_Green   := CONV30.oLamp_Indication;
+bConv30_Ind_Orange  := CONV30.oLamp_Warning;
+bConv30_Ind_Red     := CONV30.oLamp_Fault;
+
+IF conv30.oAlarm_Receive AND NOT ERROR.bconv30_Rec THEN
+    ERROR.bconv30_Rec_Count := ERROR.bconv30_Rec_Count + 1;
+END_IF;
+IF conv30.oAlarm_Send AND NOT ERROR.bconv30_Send THEN
+    ERROR.bconv30_Send_Count := ERROR.bconv30_Send_Count + 1;
+END_IF;
+ERROR.bConv30_Rec    := CONV30.oAlarm_Receive;
+ERROR.bConv30_Send   := CONV30.oAlarm_Send;
+
+// Conveyor 31
+CONV31  (   iButton_Index       := bConv31_index,
+            iButton_Call        := bConv31_Call,
+            iESTOP              := DATA.EStop_Global,
+            
+            iPS2                := bConv31_PS,
+            iProx_Stop_Home     := true,
+            
+            iVSD_Fault_Rollers  := DATA.bConv31_VSD_F,
+            
+            iNeigh_0            := CONV30.oNeigh_1,
+            iNeigh_1            := CONV32.oNeigh_0,
+            xCycle_Running      := bCycle_Start,
+            xSiren              := bSiren,
+
+            xSend_Pos           := 1,
+            xConv_Behav         := xLine_Behav,
+            xFixed_Cycle_Mode   := bConv31_Absent,
+            xAuto_Reset         := true,
+            xSensor_Delay       := t#500ms,
+            xProxy_replace      := true
+        );
+bConv31_Fwd         := CONV31.oMotor_Rollers_Fwd;
+bConv31_Rev         := CONV31.oMotor_Rollers_Rev;
+bConv31_Ind_Green   := CONV31.oLamp_Indication;
+bConv31_Ind_Orange  := CONV31.oLamp_Warning;
+bConv31_Ind_Red     := CONV31.oLamp_Fault;
+
+IF conv31.oAlarm_Receive AND NOT ERROR.bconv31_Rec THEN
+    ERROR.bconv31_Rec_Count := ERROR.bconv31_Rec_Count + 1;
+END_IF;
+IF conv31.oAlarm_Send AND NOT ERROR.bconv31_Send THEN
+    ERROR.bconv31_Send_Count := ERROR.bconv31_Send_Count + 1;
+END_IF;
+ERROR.bConv31_Rec    := CONV31.oAlarm_Receive;
+ERROR.bConv31_Send   := CONV31.oAlarm_Send;
+
+// Conveyor 32
+CONV32  (   iButton_Index       := bConv32_index,
+            iButton_Call        := bConv32_Call,
+            iESTOP              := DATA.EStop_Global,
+            
+            iPS2                := bConv32_PS,
+            iProx_Stop_Home     := true,
+            
+            iVSD_Fault_Rollers  := DATA.bConv32_VSD_F,
+            
+            iNeigh_0            := CONV31.oNeigh_1,
+            iNeigh_1            := CONV33.oNeigh_0,
+            xCycle_Running      := bCycle_Start,
+            xSiren              := bSiren,
+
+            xSend_Pos           := 1,
+            xConv_Behav         := xLine_Behav,
+            xFixed_Cycle_Mode   := bConv32_Absent,
+            xAuto_Reset         := true,
+            xSensor_Delay       := t#500ms,
+            xProxy_replace      := true
+        );
+bConv32_Fwd         := CONV32.oMotor_Rollers_Fwd;
+bConv32_Rev         := CONV32.oMotor_Rollers_Rev;
+bConv32_Ind_Green   := CONV32.oLamp_Indication;
+bConv32_Ind_Orange  := CONV32.oLamp_Warning;
+bConv32_Ind_Red     := CONV32.oLamp_Fault;
+
+IF conv32.oAlarm_Receive AND NOT ERROR.bconv32_Rec THEN
+    ERROR.bconv32_Rec_Count := ERROR.bconv32_Rec_Count + 1;
+END_IF;
+IF conv32.oAlarm_Send AND NOT ERROR.bconv32_Send THEN
+    ERROR.bconv32_Send_Count := ERROR.bconv32_Send_Count + 1;
+END_IF;
+ERROR.bConv32_Rec    := CONV32.oAlarm_Receive;
+ERROR.bConv32_Send   := CONV32.oAlarm_Send;
+
+// Conveyor 33
+CONV33  (   iButton_Index       := bConv33_index,
+            iESTOP              := DATA.EStop_Global,
+            
+            iPS2                := bConv33_PS,
+            iProx_Stop_Home     := true,
+            
+            iVSD_Fault_Rollers  := DATA.bConv33_VSD_F,
+            
+            iNeigh_0            := CONV32.oNeigh_1,
+            iNeigh_1            := 0,
+
+            xSend_Pos           := 0,
+            xConv_Behav         := xLine_Behav,
+            xAuto_Reset         := true,
+            xSensor_Delay       := t#500ms
+        );
+bConv33_Fwd         := CONV33.oMotor_Rollers_Fwd;
+bConv33_Rev         := CONV33.oMotor_Rollers_Rev;
+bConv33_Ind_Green   := CONV33.oLamp_Indication;
+bConv33_Ind_Orange  := CONV33.oLamp_Warning;
+bConv33_Ind_Red     := CONV33.oLamp_Fault;
+
+IF CONV33.oShopware_Pulse AND NOT Q27.5 THEN
+    Buyoff_Count := Buyoff_Count + 1;
+END_IF;
+Q27.5 := CONV33.oShopware_Pulse;
+
+(******************************************************************************)
+IF bHour_Passed AND bMay_Log THEN
+    bHour_Passed := false;
+    bMay_Log := false;
+    Cycle_per_Hour_Log := Cycle_per_Hour;
+    Cycle_per_Hour := 0;
+END_IF;
+
+END_FUNCTION_BLOCK

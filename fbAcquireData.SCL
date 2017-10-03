@@ -1,0 +1,155 @@
+FUNCTION_BLOCK fbAcquireData
+VAR_TEMP
+    byte_holder : BYTE;
+    bit_array AT byte_holder : ARRAY[0..7] OF BOOL;
+END_VAR
+VAR
+    VSD_On_Delay : SFB4;
+    Safety_Status : INT;
+    Reset_Delay : SFB4;
+END_VAR
+BEGIN
+byte_holder := PIB259;  //7-Gate1;
+DATA.SafeGate1 := NOT bit_array[7];
+DATA.SafeGate2 := NOT bit_array[6];
+DATA.SafeGate3 := NOT bit_array[5];
+DATA.SafeGate4 := NOT bit_array[4];
+
+(* DHS dual inputs:
+        Input block 1, byte 1, 2-7 bit: in ry af.
+        byte 2, bit 2-7
+        byte 3, bit 0-7
+        byte 4, bit 0-3 *)
+byte_holder := PIB268; //0-(Global EStop) 1,2,3-(DHS 1-3)
+DATA.EStop_Global := NOT bit_array[0];
+DATA.bConv1_DHS := bit_array[1];
+DATA.bConv7_DHS := bit_array[2];
+DATA.bConv9_DHS := bit_array[3];
+
+byte_holder := PIB269; //1,2,3-(DHS 4-6)
+DATA.bConv10_DHS := bit_array[1];
+DATA.bConv11_DHS := bit_array[2];
+DATA.bConv12_DHS := bit_array[3];
+    
+byte_holder := PIB270; //1,2,3,4-(DHS 7-10)
+DATA.bConv13_DHS := bit_array[0];
+DATA.bConv14_DHS := bit_array[1];
+DATA.bConv17_DHS := bit_array[2];
+DATA.bConv20_DHS := bit_array[3];
+    
+byte_holder := PIB271; //1,2-(DHS 11-12)
+DATA.bConv22_DHS := bit_array[0];
+DATA.bConv30_DHS := bit_array[1];
+
+byte_holder := PIB292; //EStops 1-8 //Start of Flexi Loop 1
+DATA.bConv1_EStop := NOT bit_array[0];
+DATA.bConv2_EStop := NOT bit_array[1];
+DATA.bConv3_EStop := NOT bit_array[2];
+DATA.bConv4_EStop := NOT bit_array[3];
+DATA.bConv5_EStop := NOT bit_array[4];
+DATA.bConv6_EStop := NOT bit_array[5];
+DATA.bConv7_EStop := NOT bit_array[6];
+DATA.bConv8_EStop := NOT bit_array[7];
+    
+byte_holder := PIB293; //EStops 9-16
+DATA.bConv9_EStop := NOT bit_array[0];
+DATA.bConv10_EStop := NOT bit_array[1];
+DATA.bConv11_EStop := NOT bit_array[2];
+DATA.bConv12_EStop := NOT bit_array[3];
+DATA.bConv13_EStop := NOT bit_array[4];
+DATA.bConv14_EStop := NOT bit_array[5];
+DATA.bConv15_EStop := NOT bit_array[6];
+DATA.bConv16_EStop := NOT bit_array[7];
+
+byte_holder := PIB294; //EStops 17-24
+DATA.bConv17_EStop := NOT bit_array[0];
+DATA.bConv18_EStop := NOT bit_array[1];
+DATA.bConv19_EStop := NOT bit_array[2];
+DATA.bConv20_EStop := NOT bit_array[3];
+DATA.bConv21_EStop := NOT bit_array[4];
+DATA.bConv22_EStop := NOT bit_array[5];
+DATA.bConv23_EStop := NOT bit_array[6];
+DATA.bConv24_EStop := NOT bit_array[7];
+
+byte_holder := PIB295; //EStops 25-32 //Start of Flexi Loop 2
+DATA.bConv25_EStop := NOT bit_array[0];
+DATA.bConv26_EStop := NOT bit_array[1];
+DATA.bConv27_EStop := NOT bit_array[2];
+DATA.bConv28_EStop := NOT bit_array[3];
+DATA.bConv29_EStop := NOT bit_array[4];
+DATA.bConv30_EStop := NOT bit_array[5];
+DATA.bConv31_EStop := NOT bit_array[6];
+DATA.bConv32_EStop := NOT bit_array[7];
+    
+byte_holder := PIB284; //SICK lets Siemens know that ESTOP circuit may be Reset
+DATA.EStop_Can_Reset := bit_array[0];
+
+Reset_Delay(IN := DATA.EStop_Reset, PT := t#1s);
+IF Reset_Delay.Q THEN
+    DATA.EStop_Reset := false;
+END_IF;
+
+byte_holder := 0;   // HMI user Resets ESTOP circuit
+bit_array[0] := DATA.EStop_Reset;
+PQB256 := byte_holder;
+
+IF DATA.EStop_Global THEN
+    IF DATA.EStop_Can_Reset THEN
+        Safety_Status := 1;  // Resetable
+    ELSE 
+        Safety_Status := 0;  // System Halted
+    END_IF;
+ELSE
+    Safety_Status := 2;  // System Online
+END_IF;
+
+VSD_On_Delay(IN := NOT DATA.EStop_Global, PT := t#3s);
+DATA.bConv1_Turn_VSD_F := VSD_On_Delay.Q AND NOT bConv1_Turn_VSD_Hlth;
+DATA.bConv1_VSD_F := VSD_On_Delay.Q AND NOT bConv1_VSD_Hlth;
+DATA.bConv2_VSD_F := VSD_On_Delay.Q AND NOT bConv2_VSD_Hlth;
+DATA.bConv3_VSD_F := VSD_On_Delay.Q AND NOT bConv3_VSD_Hlth;
+DATA.bConv4_VSD_F := VSD_On_Delay.Q AND NOT bConv4_VSD_Hlth;
+DATA.bConv5_VSD_F := VSD_On_Delay.Q AND NOT bConv5_VSD_Hlth;
+DATA.bConv6_VSD_F := VSD_On_Delay.Q AND NOT bConv6_VSD_Hlth;
+DATA.bConv7_Rollover_VSD_F := VSD_On_Delay.Q AND NOT bConv7_Rollovr_VSD_Hlth;
+DATA.bConv7_Bottom_VSD_F := VSD_On_Delay.Q AND NOT bConv7_Bottom_VSD_Hlth;
+DATA.bConv7_Top_VSD_F := VSD_On_Delay.Q AND NOT bConv7_Top_VSD_Hlth;
+DATA.bConv8_VSD_F := VSD_On_Delay.Q AND NOT bConv8_VSD_Hlth;
+DATA.bConv9_Tilt_VSD_F := VSD_On_Delay.Q AND NOT bConv9_Tilt_VSD_Hlth;
+DATA.bConv9_VSD_F := VSD_On_Delay.Q AND NOT bConv9_VSD_Hlth;
+DATA.bConv10_Tilt_VSD_F := VSD_On_Delay.Q AND NOT bConv10_Tilt_VSD_Hlth;
+DATA.bConv10_VSD_F := VSD_On_Delay.Q AND NOT bConv10_VSD_Hlth;
+DATA.bConv11_Tilt_VSD_F := VSD_On_Delay.Q AND NOT bConv11_Tilt_VSD_Hlth;
+DATA.bConv11_VSD_F := VSD_On_Delay.Q AND NOT bConv11_VSD_Hlth;
+DATA.bConv12_Tilt_VSD_F := VSD_On_Delay.Q AND NOT bConv12_Tilt_VSD_Hlth;
+DATA.bConv12_VSD_F := VSD_On_Delay.Q AND NOT bConv12_VSD_Hlth;
+DATA.bConv13_Rollover_VSD_F := VSD_On_Delay.Q AND NOT bConv13_Rollovr_VSD_Hlth;
+DATA.bConv13_Bottom_VSD_F := VSD_On_Delay.Q AND NOT bConv13_Bottom_VSD_Hlth;
+DATA.bConv13_Top_VSD_F := VSD_On_Delay.Q AND NOT bConv13_Top_VSD_Hlth;
+DATA.bConv14_Turn_VSD_F := VSD_On_Delay.Q AND NOT bConv14_Turn_VSD_Hlth;
+DATA.bConv14_VSD_F := VSD_On_Delay.Q AND NOT bConv14_VSD_Hlth;
+DATA.bConv15_VSD_F := VSD_On_Delay.Q AND NOT bConv15_VSD_Hlth;
+DATA.bConv16_VSD_F := VSD_On_Delay.Q AND NOT bConv16_VSD_Hlth;
+DATA.bConv17_Turn_VSD_F := VSD_On_Delay.Q AND NOT bConv17_Turn_VSD_Hlth;
+DATA.bConv17_VSD_F := VSD_On_Delay.Q AND NOT bConv17_VSD_Hlth;
+DATA.bConv18_VSD_F := VSD_On_Delay.Q AND NOT bConv18_VSD_Hlth;
+DATA.bConv19_VSD_F := VSD_On_Delay.Q AND NOT bConv19_VSD_Hlth;
+DATA.bConv20_Rollover_VSD_F := VSD_On_Delay.Q AND NOT bConv20_Rollovr_VSD_Hlth;
+DATA.bConv20_VSD_F := VSD_On_Delay.Q AND NOT bConv20_VSD_Hlth;
+DATA.bConv21_VSD_F := VSD_On_Delay.Q AND NOT bConv21_VSD_Hlth;
+DATA.bConv22_Turn_VSD_F := VSD_On_Delay.Q AND NOT bConv22_Turn_VSD_Hlth;
+DATA.bConv22_VSD_F := VSD_On_Delay.Q AND NOT bConv22_VSD_Hlth;
+DATA.bConv23_VSD_F := VSD_On_Delay.Q AND NOT bConv23_VSD_Hlth;
+DATA.bConv24_VSD_F := VSD_On_Delay.Q AND NOT bConv24_VSD_Hlth;
+DATA.bConv25_VSD_F := VSD_On_Delay.Q AND NOT bConv25_VSD_Hlth;
+DATA.bConv26_VSD_F := VSD_On_Delay.Q AND NOT bConv26_VSD_Hlth;
+DATA.bConv27_VSD_F := VSD_On_Delay.Q AND NOT bConv27_VSD_Hlth;
+DATA.bConv28_VSD_F := VSD_On_Delay.Q AND NOT bConv28_VSD_Hlth;
+DATA.bConv29_VSD_F := VSD_On_Delay.Q AND NOT bConv29_VSD_Hlth;
+DATA.bConv30_Turn_VSD_F := VSD_On_Delay.Q AND NOT bConv30_Turn_VSD_Hlth;
+DATA.bConv30_VSD_F := VSD_On_Delay.Q AND NOT bConv30_VSD_Hlth;
+DATA.bConv31_VSD_F := VSD_On_Delay.Q AND NOT bConv31_VSD_Hlth;
+DATA.bConv32_VSD_F := VSD_On_Delay.Q AND NOT bConv32_VSD_Hlth;
+DATA.bConv33_VSD_F := VSD_On_Delay.Q AND NOT bConv33_VSD_Hlth;
+
+END_FUNCTION_BLOCK

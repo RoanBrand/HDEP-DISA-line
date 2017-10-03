@@ -1,0 +1,269 @@
+DATA_BLOCK ERROR
+STRUCT
+    bConv1_Rec : BOOL;      // DBW0
+    bConv1_Send : BOOL;
+    bConv2_Rec : BOOL;
+    bConv2_Send : BOOL;
+    bConv3_Rec : BOOL;
+    bConv3_Send : BOOL;
+    bConv4_Rec : BOOL;
+    bConv4_Send : BOOL;
+    bConv5_Rec : BOOL;
+    bConv5_Send : BOOL;
+    bConv6_Rec : BOOL;
+    bConv6_Send : BOOL;
+    bConv7_Rec : BOOL;
+    bConv7_Send : BOOL;
+    bConv8_Rec : BOOL;
+    bConv8_Send : BOOL;
+    bConv9_Rec : BOOL;      // DBW2
+    bConv9_Send : BOOL;
+    bConv10_Rec : BOOL;
+    bConv10_Send : BOOL;
+    bConv11_Rec : BOOL;
+    bConv11_Send : BOOL;
+    bConv12_Rec : BOOL;
+    bConv12_Send : BOOL;
+    bConv13_Rec : BOOL;
+    bConv13_Send : BOOL;
+    bConv14_Rec : BOOL;
+    bConv14_Send : BOOL;
+    bConv15_Rec : BOOL;
+    bConv15_Send : BOOL;
+    bConv16_Rec : BOOL;
+    bConv16_Send : BOOL;
+    bConv17_Rec : BOOL;     // DBW4
+    bConv17_Send : BOOL;
+    bConv18_Rec : BOOL;
+    bConv18_Send : BOOL;
+    bConv19_Rec : BOOL;
+    bConv19_Send : BOOL;
+    bConv20_Rec : BOOL;
+    bConv20_Send : BOOL;
+    bConv21_Rec : BOOL;
+    bConv21_Send : BOOL;
+    bConv22_Rec : BOOL;
+    bConv22_Send : BOOL;
+    bConv23_Rec : BOOL;
+    bConv23_Send : BOOL;
+    bConv24_Rec : BOOL;
+    bConv24_Send : BOOL;
+    bConv25_Rec : BOOL;     // DBW6
+    bConv25_Send : BOOL;
+    bConv26_Rec : BOOL;
+    bConv26_Send : BOOL;
+    bConv27_Rec : BOOL;
+    bConv27_Send : BOOL;
+    bConv28_Rec : BOOL;
+    bConv28_Send : BOOL;
+    bConv29_Rec : BOOL;
+    bConv29_Send : BOOL;
+    bConv30_Rec : BOOL;
+    bConv30_Send : BOOL;
+    bConv31_Rec : BOOL;
+    bConv31_Send : BOOL;
+    bConv32_Rec : BOOL;
+    bConv32_Send : BOOL;
+    
+    bConv1_Rec_Count : INT;
+    bConv1_Send_Count : INT;
+    bConv2_Rec_Count : INT;
+    bConv2_Send_Count : INT;
+    bConv3_Rec_Count : INT;
+    bConv3_Send_Count : INT;
+    bConv4_Rec_Count : INT;
+    bConv4_Send_Count : INT;
+    bConv5_Rec_Count : INT;
+    bConv5_Send_Count : INT;
+    bConv6_Rec_Count : INT;
+    bConv6_Send_Count : INT;
+    bConv7_Rec_Count : INT;
+    bConv7_Send_Count : INT;
+    bConv8_Rec_Count : INT;
+    bConv8_Send_Count : INT;
+    bConv9_Rec_Count : INT;
+    bConv9_Send_Count : INT;
+    bConv10_Rec_Count : INT;
+    bConv10_Send_Count : INT;
+    bConv11_Rec_Count : INT;
+    bConv11_Send_Count : INT;
+    bConv12_Rec_Count : INT;
+    bConv12_Send_Count : INT;
+    bConv13_Rec_Count : INT;
+    bConv13_Send_Count : INT;
+    bConv14_Rec_Count : INT;
+    bConv14_Send_Count : INT;
+    bConv15_Rec_Count : INT;
+    bConv15_Send_Count : INT;
+    bConv16_Rec_Count : INT;
+    bConv16_Send_Count : INT;
+    bConv17_Rec_Count : INT;
+    bConv17_Send_Count : INT;
+    bConv18_Rec_Count : INT;
+    bConv18_Send_Count : INT;
+    bConv19_Rec_Count : INT;
+    bConv19_Send_Count : INT;
+    bConv20_Rec_Count : INT;
+    bConv20_Send_Count : INT;
+    bConv21_Rec_Count : INT;
+    bConv21_Send_Count : INT;
+    bConv22_Rec_Count : INT;
+    bConv22_Send_Count : INT;
+    bConv23_Rec_Count : INT;
+    bConv23_Send_Count : INT;
+    bConv24_Rec_Count : INT;
+    bConv24_Send_Count : INT;
+    bConv25_Rec_Count : INT;
+    bConv25_Send_Count : INT;
+    bConv26_Rec_Count : INT;
+    bConv26_Send_Count : INT;
+    bConv27_Rec_Count : INT;
+    bConv27_Send_Count : INT;
+    bConv28_Rec_Count : INT;
+    bConv28_Send_Count : INT;
+    bConv29_Rec_Count : INT;
+    bConv29_Send_Count : INT;
+    bConv30_Rec_Count : INT;
+    bConv30_Send_Count : INT;
+    bConv31_Rec_Count : INT;
+    bConv31_Send_Count : INT;
+    bConv32_Rec_Count : INT;
+    bConv32_Send_Count : INT;
+    bConv33_Rec_Count : INT;
+    
+END_STRUCT
+BEGIN
+END_DATA_BLOCK
+DATA_BLOCK TIMES
+STRUCT (*
+    bConv1_Late : BOOL;      // DBW0
+
+    bConv2_Late : BOOL;
+
+    bConv3_Late : BOOL;
+
+    bConv4_Late : BOOL;
+
+    bConv5_Late : BOOL;
+
+    bConv6_Late : BOOL;
+
+    bConv7_Late : BOOL;
+    bConv8_Late : BOOL;
+
+    bConv9_Late : BOOL;
+
+    bConv10_Late : BOOL;
+
+    bConv11_Late : BOOL;
+
+    bConv12_Late : BOOL;
+
+    bConv13_Late : BOOL;
+
+    bConv14_Late : BOOL;
+
+    bConv15_Late : BOOL;
+
+    bConv16_Late : BOOL;
+
+    bConv17_Late : BOOL;
+
+    bConv18_Late : BOOL;
+
+    bConv19_Late : BOOL;
+
+    bConv20_Late : BOOL;
+
+    bConv21_Late : BOOL;
+
+    bConv22_Late : BOOL;
+
+    bConv23_Late : BOOL;
+
+    bConv24_Late : BOOL;
+
+    bConv25_Late : BOOL;
+
+    bConv26_Late : BOOL;
+
+    bConv27_Late : BOOL;
+
+    bConv28_Late : BOOL;
+
+    bConv29_Late : BOOL;
+
+    bConv30_Late : BOOL;
+
+    bConv31_Late : BOOL;
+
+    bConv32_Late : BOOL;
+    bConv33_Late : BOOL; *)
+    bConv1_LateCount : INT;
+
+    bConv2_LateCount : INT;
+
+    bConv3_LateCount : INT;
+
+    bConv4_LateCount : INT;
+
+    bConv5_LateCount : INT;
+
+    bConv6_LateCount : INT;
+
+    bConv7_LateCount : INT;
+
+    bConv8_LateCount : INT;
+
+    bConv9_LateCount : INT;
+
+    bConv10_LateCount : INT;
+
+    bConv11_LateCount : INT;
+
+    bConv12_LateCount : INT;
+
+    bConv13_LateCount : INT;
+
+    bConv14_LateCount : INT;
+
+    bConv15_LateCount : INT;
+
+    bConv16_LateCount : INT;
+
+    bConv17_LateCount : INT;
+
+    bConv18_LateCount : INT;
+
+    bConv19_LateCount : INT;
+
+    bConv20_LateCount : INT;
+
+    bConv21_LateCount : INT;
+ 
+    bConv22_LateCount : INT;
+
+    bConv23_LateCount : INT;
+
+    bConv24_LateCount : INT;
+
+    bConv25_LateCount : INT;
+
+    bConv26_LateCount : INT;
+
+    bConv27_LateCount : INT;
+
+    bConv28_LateCount : INT;
+
+    bConv29_LateCount : INT;
+
+    bConv30_LateCount : INT;
+
+    bConv31_LateCount : INT;
+
+    bConv32_LateCount : INT;
+    bConv33_LateCount : INT;
+    
+END_STRUCT
+BEGIN
+END_DATA_BLOCK

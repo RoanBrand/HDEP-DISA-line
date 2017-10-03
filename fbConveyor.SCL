@@ -1,0 +1,1214 @@
+FUNCTION_BLOCK fbConveyor
+TITLE = 'Multi-purpose Conveyor'
+VERSION : '1.0'
+KNOW_HOW_PROTECT
+AUTHOR : 'RF Brand'
+//*******************************************************************//
+VAR_INPUT
+    (* Physical Inputs *)
+    iButton_Index : BOOL;
+    iButton_Call : BOOL;
+    iSelect_Fwd : BOOL;
+    iSelect_Rev : BOOL;
+    iDHS : BOOL;    // Dual-Hand Start
+    iEStop : BOOL;
+    
+    iPS1, iPS2 : BOOL;  // Product Sensors
+    iProx_Stop_Home : BOOL;    // Positional Proximity Sensors
+    iProx_Stop_Pos1 : BOOL;
+    iProx_Stop_Pos2 : BOOL;
+    iProx_Slow_Home : BOOL;
+    iProx_Slow_Pos1 : BOOL;
+    iProx_Slow_Pos2 : BOOL;
+    
+    iVSD_Fault_Rollers : BOOL;
+    iVSD_Fault_Aux1 : BOOL;
+    iVSD_Fault_Aux2 : BOOL;
+    
+    (* Inter-Conveyor Messages*)
+    iNeigh_0 : INT; // Previous Conveyor
+    iNeigh_1 : INT; // Next Conveyor -> Straight
+    iNeigh_2 : INT; // Next Conveyor -> Pos1
+    iNeigh_3 : INT; // Next Conveyor -> Pos2
+    (*  0-Nothing
+        1-AbletoReceive
+        2-YouMaySend
+        3-ReqtoSend
+        4-ProductCleared
+        5-SendingProduct
+        6-ProductReceived
+        10-Error    *)
+    
+    (* HMI *)
+    iManual_Mode_Req : BOOL;    // User Request Manual Control
+    
+    (* Settings *)
+    xSend_Pos : INT;    (* SPECIFY SENDING DIRECTION OF PRODUCT: *)
+                        // 0-Not able to send. End Conv
+                        // 1-Send product straight; 2-Pos1 via Aux1;
+                        // 3-Pos1 via Aux1 (Rev Rollers);
+                        // 4-Pos1 via Aux1 (Using Aux2 Rollers);
+                        // 5-Pos2 via Aux1 (Rev Rollers);
+                        
+    xConv_Behav : INT;  (* SPECIFY CONVEYOR BEHAVIOUR: *)
+                        // 0-Basic Index Button Conv with DHS Turn;
+                        // 1-Automatic Pass on Block without user;
+                        // 2-Segmented Line Control;
+                                                
+    xAuto_Reset : BOOL; // Auto Reset from SEND/RECEIVE/POSITION faults;
+    xAuto_Start : BOOL;
+    xSegment_Startpoint : BOOL;
+    xFixed_Cycle_Mode : BOOL;
+    xCycle_Running : BOOL; // Are the fettlers busy?
+    xSiren : BOOL;  // Main panel siren. To flash lights of conveyor when siren sounds
+    
+    iInit_Send : BOOL;
+    
+    xSensor_Delay : TIME := t#500ms;
+    
+    xProxy_replace : BOOL;
+END_VAR
+VAR_OUTPUT
+    (* Physical Outputs *)
+    oMotor_Rollers_Fwd : BOOL;  // Standard Conveyor Rollers
+    oMotor_Rollers_Rev : BOOL;
+    
+    oMotor_Aux1_Fwd : BOOL;     // Turntable Device/Rollover/Tilting
+    oMotor_Aux1_Rev : BOOL;
+    oMotor_Aux1_Fast : BOOL;
+    
+    oMotor_Aux2_Fwd : BOOL;     // Second Pair of Rollers
+    oMotor_Aux2_Rev : BOOL;
+    oMotor_Aux2_Fast : BOOL;
+    
+    oLamp_Indication : BOOL;
+    oLamp_Warning : BOOL;
+    oLamp_Fault : BOOL;
+    
+    oShopware_Pulse : BOOL;
+        
+    (* Inter-Conveyor Messages*)
+    oNeigh_0 : INT; // Previous Conveyor
+    oNeigh_1 : INT; // Next Conveyor -> Straight
+    oNeigh_2 : INT; // Next Conveyor -> Pos1
+    oNeigh_3 : INT; // Next Conveyor -> Pos2
+    
+    oAlarm_Receive : BOOL;
+    oAlarm_Send : BOOL;
+        
+    (* Line Control *)
+    oAble_to_Part : BOOL;
+    oReady_to_Part : BOOL;
+END_VAR
+CONST
+    TO_Send         := t#10s;
+    TO_Receive      := t#30s;
+    DEL_SendClear   := t#5s;
+END_CONST
+VAR_TEMP
+    bTicker : BOOL; // Pulse Input from Siemens Clock Memory
+END_VAR
+VAR
+    State : INT;    // Finite State Machine for Conveyor:
+                    // 0-RESET; 1-ABLETORECEIVE; 2-RECEIVING; 3-RECEIVEDPRODUCT;
+                    // 4-PRODUCTLOADEDMANUALLY; 5-POSITIONCONVDHS; 6-POSITIONCONVSEND;
+                    // 7-POSITIONCONVHOME; 8-ABLETOSEND; 9-REQUESTTOSEND;
+                    // 10-NEXTCONVBUSY; 11-SENDING; 12-FINISHSEND; 13-RECEIVEWHILESENDING;
+                    // 14-MANUALMODE; 15-HALTCONV; 16-ERROR:RECEIVE; 17-ERROR:SEND;
+                    // 18-ERROR:POSITION;
+                    
+                    //SPECIAL:
+    
+    Settings_old : INT;   //Keep track of setting changes
+                    
+    State_Pos : INT;    // Finite State Machine for Positioning System:
+                        // 0-(Fwd Home->Pos1); 1-(Fwd Home->Pos1 Slow);
+                        // 2-(Fwd Home->Pos1 Halt); 3-(Fwd Home->Pos1 Limit);
+                        // 4-(Rev Pos1->Home); 5-(Rev Pos1->Home Slow);
+                        // 6-(Rev ->Home Halt); 7-(Rev ->Home Limit);
+                        
+
+    bTS : BOOL;             // Transitioned State Indication
+    tTimer : SFB4;          // IEC On-Delay Timer used for timing sequences
+    tPS_Debounce : SFB5;    // IEC Off-Delay Timer used for debouncing product sensor
+    tPS1_Debounce : SFB5;
+    tShopware_Pulse : SFB3;  // IEC Pulse Generator for Shopware
+    bProduct_Detected : BOOL;
+    bProduct_Unexpected : BOOL;
+    dLight_State : INT;
+    
+    bManual_Field_Buttons : BOOL;
+    bManual_Btn_Fwd : BOOL;
+    bManual_Btn_Rev : BOOL;
+    
+    bManaul_HMI_Fwd : BOOL;
+    bManaul_HMI_Rev : BOOL;
+    bManaul_HMI_Aux2_Fwd : BOOL;
+    bManaul_HMI_Aux2_Rev : BOOL;
+    
+    bOld_Fwd : BOOL;
+    bOld_Rev : BOOL;
+    bOld_Aux2_Fwd : BOOL;
+    bOld_Aux2_Rev : BOOL;
+    
+    tTimer_WorkTime : SFB4;
+    bStarted_Working : BOOL;
+    bStopped_Working : BOOL;
+    
+    bProduct_Send_Success : BOOL;
+    
+    bReceived_Correct : BOOL;
+    bProduct_Lost : BOOL;
+    tTimer2 : SFB4;
+    boldPS1 : BOOL;
+END_VAR
+BEGIN
+bTicker := M0.6;    // Enable Siemens Clock Memory @ MB0
+
+// Product Sensor Debounce:
+tPS_Debounce(IN := iPS2, PT := xSensor_Delay);
+tPS1_Debounce(IN := iPS1, PT := t#200ms);
+
+bProduct_Detected := tPS_Debounce.Q;
+
+IF iEStop OR iVSD_Fault_Rollers OR iVSD_Fault_Aux1 OR iVSD_Fault_Aux2 THEN
+    State := 15;    // Goto HALT CONVEYOR
+    bTS := false;
+ELSIF iManual_Mode_Req AND NOT (State = 14) THEN
+    State := 14;    // Goto MANUAL MODE
+    bTS := false;
+END_IF;
+
+CASE State OF
+    0   :   IF NOT bTS THEN                         // RESET
+                oMotor_Rollers_Fwd := false;
+                oMotor_Rollers_Rev := false;
+                oMotor_Aux1_Fwd := false;
+                oMotor_Aux1_Rev := false;
+                oMotor_Aux1_Fwd := false;
+                oMotor_Aux1_Rev := false;
+                oMotor_Aux2_Fwd := false;
+                oMotor_Aux2_Rev := false;
+                oLamp_Indication := false;
+                oLamp_Warning := false;
+                oLamp_Fault := false;
+                oShopware_Pulse := false;
+                tTimer(IN := false);
+                oNeigh_0 := 0;
+                oNeigh_1 := 0;
+                oNeigh_2 := 0;
+                oNeigh_3 := 0;
+                oAble_to_Part := false;
+                oReady_to_Part := false;
+                oAlarm_Receive := false;
+                oAlarm_Send := false;
+                bTS := true;
+            END_IF;
+            
+            tTimer(IN := true, PT := t#500ms);
+            
+            IF tTimer.Q THEN
+                IF NOT iProx_Stop_Home THEN
+                    IF (xConv_Behav = 0) THEN
+                        State := 5; // Goto POSITION CONV WITH DHS
+                    ELSIF (xConv_Behav = 1) OR (xConv_Behav = 2) THEN
+                        IF bProduct_Detected THEN
+                            State := 6; // Goto POSITION CONV TO SEND
+                        ELSE
+                            State := 7; // Goto POSITION CONV HOME
+                        END_IF;
+                    END_IF;
+                ELSIF bProduct_Detected THEN
+                    State := 4; // Goto RECEIVED PRODUCT
+                ELSE
+                    State := 1; // Goto ABLE TO RECEIVE PRODUCT
+                END_IF;
+                bTS := false;
+            END_IF;
+            ;
+    1   :   IF NOT bTS THEN                         // ABLE TO RECEIVE PRODUCT
+                tTimer(IN := false);
+                oMotor_Rollers_Fwd := false;
+                oMotor_Rollers_Rev := false;
+                oMotor_Aux1_Fwd := false;
+                oMotor_Aux1_Rev := false;
+                oMotor_Aux2_Fwd := false;
+                oLamp_Indication := true;
+                (*
+                IF (xConv_Behav = 2) THEN
+                    oLamp_Warning := true;
+                ELSE
+                    oLamp_Warning := false;
+                END_IF;*)
+                oNeigh_0 := 1;
+                oNeigh_1 := 0;
+                oNeigh_2 := 0;
+                oNeigh_3 := 0;
+                oAble_to_Part := true;
+                oReady_to_Part := false;
+                dLight_State := 0;
+                bTS := true;
+            END_IF;
+            IF (iNeigh_0 = 3) THEN
+                State := 2; // Goto RECEIVING PRODUCT
+                bTS := false;
+            ELSIF bProduct_Detected THEN
+                State := 4; // Goto PRODUCT LOADED MANUALLY
+                bTS := false;
+            ELSIF (xConv_Behav = 2) THEN
+                IF xCycle_Running THEN
+                    IF (iButton_Index OR xFixed_Cycle_Mode) THEN
+                        oReady_to_Part := true;
+                    END_IF;
+                    oLamp_Warning := NOT oReady_to_Part;
+                    IF xSiren THEN
+                        oLamp_Indication := bTicker; oLamp_Warning := bTicker; oLamp_Fault := bTicker;
+                    ELSE
+                        oLamp_Indication := true; oLamp_Fault := false;
+                    END_IF;
+                ELSE
+                    tTimer(IN := true, PT := t#0.5s);
+                    IF tTimer.Q THEN
+                        tTimer(IN:=false);
+                        dLight_State := (dLight_State+1) MOD 4;
+                    END_IF;
+                    oLamp_Indication := false; oLamp_Warning := false; oLamp_Fault := false;
+                    CASE dLight_State OF
+                        0 : oLamp_Indication := true;
+                        1 : oLamp_Warning := true;
+                        2 : oLamp_Fault := true;
+                        3 : oLamp_Warning := true;
+                    END_CASE;
+                    oReady_to_Part := false;
+                    //oLamp_Warning := true;
+                END_IF;
+            END_IF;
+    2   :   IF NOT bTS THEN                         // RECEIVING PRODUCT
+                tTimer(IN := false);
+                oMotor_Rollers_Fwd := true;
+                oMotor_Rollers_Rev := false;
+                oLamp_Warning := true;
+                bProduct_Unexpected := true;
+                bReceived_Correct := false;
+                oNeigh_0 := 2;
+                oAble_to_Part := false;
+                bTS := true;
+            END_IF;
+            
+            tTimer(IN := true, PT := TO_Receive);
+            
+            IF (iNeigh_0 = 4) THEN
+                bProduct_Unexpected := false;
+            END_IF;
+
+            IF bProduct_Detected THEN
+                IF bProduct_Unexpected THEN
+                    State := 16;    // Goto ERROR: RECEIVING PRODUCT
+                ELSE
+                    State := 3; // Goto RECEIVED PRODUCT
+                END_IF;
+                bTS := false;
+            ELSIF (iNeigh_0 = 5) THEN
+                oNeigh_0 := 0;
+            ELSIF (iNeigh_0 = 10) THEN
+                State := 1; // Goto ABLE TO RECEIVE PRODUCT
+                bTS := false;
+            ELSIF tTimer.Q THEN
+                State := 16;    // Goto ERROR: PRODUCT NOT RECEIVED
+                bTS := false;
+            END_IF;
+            ;
+    3   :   IF NOT bTS THEN                         // RECEIVED PRODUCT
+                oMotor_Rollers_Fwd := false;
+                oMotor_Rollers_Rev := false;
+                oLamp_Indication := true;
+                oLamp_Warning := false;
+                oNeigh_0 := 6;
+                bReceived_Correct := true;
+                bTS := true;
+            END_IF;
+            
+            IF (xSend_Pos = 1) THEN
+                State := 8; // Goto ABLE TO SEND PRODUCT
+                bTS := false;
+            ELSIF (xSend_Pos > 1) THEN
+                IF (xConv_Behav = 0) OR (xConv_Behav = 2) THEN
+                    State := 5; // Goto POSITION CONV WITH DHS
+                    bTS := false;
+                ELSIF (xConv_Behav = 1) THEN
+                    State := 6; // Goto POSITION CONVEYOR TO SEND
+                    bTS := false;
+                END_IF;
+            ELSIF (xSend_Pos = 0) AND NOT bProduct_Detected THEN
+                State := 51;
+                bTS := false;
+            END_IF;
+            ;
+    4   :   IF NOT bTS THEN                         // PRODUCT LOADED MANUALLY
+                oLamp_Indication := true;
+                oAble_to_Part := false;
+                bTS := true;
+            END_IF;
+            
+            IF (xSend_Pos = 1) AND iButton_Index OR xAuto_Start THEN
+                State := 8; // Goto ABLE TO SEND PRODUCT
+                bTS := false;
+            ELSIF (xConv_Behav = 1) THEN
+                oLamp_Warning := true;
+                IF iButton_Index THEN
+                    State := 6; // Goto POSITION CONVEYOR TO SEND
+                    bTS := false;
+                END_IF;
+            ELSIF iDHS THEN
+                State := 5; // Goto POSITION CONV WITH DHS
+                bTS := false;
+            END_IF;
+            
+            IF xSiren THEN
+                oLamp_Indication := bTicker; oLamp_Warning := bTicker; oLamp_Fault := bTicker;
+            ELSE
+                IF (xConv_Behav = 2) AND NOT xCycle_Running THEN
+                    tTimer(IN := true, PT := t#0.5s);
+                    IF tTimer.Q THEN
+                        tTimer(IN:=false);
+                        dLight_State := (dLight_State+1) MOD 4;
+                    END_IF;
+                oLamp_Indication := false; oLamp_Warning := false; oLamp_Fault := false;
+                CASE dLight_State OF
+                    0 : oLamp_Indication := true;
+                    1 : oLamp_Warning := true;
+                    2 : oLamp_Fault := true;
+                    3 : oLamp_Warning := true;
+                END_CASE;
+                END_IF;
+            END_IF;
+            
+            IF NOT bProduct_Detected THEN
+                State := 0; // Goto RESET
+                bTS := false;
+            END_IF;
+    5   :   IF NOT bTS THEN                         // POSITION CONV WITH DHS
+                oMotor_Rollers_Fwd := false;
+                oMotor_Rollers_Rev := false;
+                oMotor_Aux2_Fwd := false;
+                IF iSelect_Fwd THEN
+                    State_Pos := 0; // Home->Pos1
+                ELSIF iSelect_Rev THEN
+                    State_Pos := 8; // Pos2->Home
+                END_IF;
+                oAble_to_Part := false;
+                bTS := true;
+            END_IF;
+            
+            CASE State_Pos OF
+                0   :   oMotor_Aux1_Fast := true;           // Home->Pos1
+                        oMotor_Aux1_Rev := false;
+                        IF iDHS THEN
+                            oMotor_Aux1_Fwd := true;
+                            oLamp_Warning := true;
+                        ELSE
+                            oMotor_Aux1_Fwd := false;
+                            oLamp_Warning := false;
+                        END_IF;
+                        
+                        IF iSelect_Rev THEN
+                            State_Pos := 8; // Pos2->Home
+                        ELSIF iProx_Slow_Pos2 THEN
+                            State_Pos := 5;
+                        ELSIF iProx_Slow_Pos1 THEN
+                            State_Pos := 1; // Home->Pos1 Slow
+                        END_IF;
+                        ;
+                1   :   oMotor_Aux1_Fast := false;          // Home->Pos1 Slow
+                        oMotor_Aux1_Rev := false;
+                        IF iDHS THEN
+                            oMotor_Aux1_Fwd := true;
+                            oLamp_Warning := true;
+                        ELSE
+                            oMotor_Aux1_Fwd := false;
+                            oLamp_Warning := false;
+                        END_IF;
+                        
+                        IF iSelect_Rev THEN
+                            State_Pos := 8;
+                        ELSIF iProx_Stop_Pos1 THEN
+                            State_Pos := 2;
+                            oMotor_Aux1_Fwd := false;
+                            oLamp_Warning := false;
+                        END_IF;
+                        ;
+                2   :   IF NOT iDHS THEN                    // Home->Pos1 Wait
+                            IF (xSend_Pos = 5) THEN
+                                State_Pos := 4;
+                            ELSIF (xSend_Pos < 5) AND (xSend_Pos > 0) THEN
+                                State_Pos := 3; 
+                            END_IF;
+                        END_IF;
+                        ;
+                3   :   IF iDHS THEN                        // Home->Pos1 Limit
+                            oLamp_Fault := true;
+                        ELSE
+                            oLamp_Fault := false;
+                        END_IF;
+                        
+                        IF iSelect_Rev THEN
+                            State_Pos := 8;
+                            oLamp_Fault := false;
+                        END_IF;
+                        ;
+                4   :   oMotor_Aux1_Fast := true;           // Pos1->Pos2
+                        oMotor_Aux1_Rev := false;
+                        IF iDHS THEN
+                            oMotor_Aux1_Fwd := true;
+                            oLamp_Warning := true;
+                        ELSE
+                            oMotor_Aux1_Fwd := false;
+                            oLamp_Warning := false;
+                        END_IF;
+                        
+                        IF iSelect_Rev THEN
+                            State_Pos := 8; // Pos2->Home
+                        ELSIF iProx_Slow_Pos2 THEN
+                            State_Pos := 5; // Pos1->Pos2 Slow
+                        END_IF;
+                        ;
+                5   :   oMotor_Aux1_Fast := false;          // Pos1->Pos2 Slow
+                        oMotor_Aux1_Rev := false;
+                        IF iDHS THEN
+                            oMotor_Aux1_Fwd := true;
+                            oLamp_Warning := true;
+                        ELSE
+                            oMotor_Aux1_Fwd := false;
+                            oLamp_Warning := false;
+                        END_IF;
+                        
+                        IF iSelect_Rev THEN
+                            State_Pos := 8;
+                        ELSIF iProx_Stop_Pos2 THEN
+                            State_Pos := 6;
+                            oMotor_Aux1_Fwd := false;
+                            oLamp_Warning := false;
+                        END_IF;
+                6   :   IF NOT iDHS THEN                    // Pos1->Pos2 Wait
+                            State_Pos := 7;
+                        END_IF;
+                        ;
+                7   :   IF iDHS THEN                        // Pos1->Pos2 Limit
+                            oLamp_Fault := true;
+                        ELSE
+                            oLamp_Fault := false;
+                        END_IF;
+                        
+                        IF iSelect_Rev THEN
+                            State_Pos := 8;
+                            oLamp_Fault := false;
+                        END_IF;
+                        ;         
+                8   :   oMotor_Aux1_Fast := true;           // Pos2->Home
+                        oMotor_Aux1_Fwd := false;
+                        IF iDHS THEN
+                            oMotor_Aux1_Rev := true;
+                            oLamp_Warning := true;
+                        ELSE
+                            oMotor_Aux1_Rev := false;
+                            oLamp_Warning := false;
+                        END_IF;
+                        
+                        IF iSelect_Fwd THEN
+                            State_Pos := 0;
+                        ELSIF iProx_Slow_Home THEN
+                            State_Pos := 9;
+                        ELSIF iProx_Stop_Home THEN
+                            State_Pos := 10;
+                            oMotor_Aux1_Rev := false;
+                            oLamp_Warning := false;
+                        END_IF;
+                        ;
+                9   :   oMotor_Aux1_Fast := false;          // Pos2->Home Slow
+                        oMotor_Aux1_Fwd := false;
+                        IF iDHS THEN
+                            oMotor_Aux1_Rev := true;
+                            oLamp_Warning := true;
+                        ELSE
+                            oMotor_Aux1_Rev := false;
+                            oLamp_Warning := false;
+                        END_IF;
+                        
+                        IF iSelect_Fwd THEN
+                            State_Pos := 0;
+                        ELSIF iProx_Stop_Home THEN
+                            State_Pos := 10;
+                            oMotor_Aux1_Rev := false;
+                            oLamp_Warning := false;
+                        END_IF;
+                        ;
+               10   :   IF NOT iDHS THEN                    // Pos2->Home Wait
+                            State_Pos := 11;
+                        END_IF;
+                        ;
+               11   :   IF iDHS THEN                        // Pos2->Home Limit
+                            oLamp_Fault := true;
+                        ELSE
+                            oLamp_Fault := false;
+                        END_IF;
+                        
+                        IF iSelect_Fwd THEN
+                            State_Pos := 0;
+                            oLamp_Fault := false;
+                        END_IF;
+                        ;
+                ELSE:
+                        ;
+            END_CASE;
+            IF xSiren THEN
+                oLamp_Indication := bTicker; oLamp_Warning := bTicker; oLamp_Fault := bTicker;
+            ELSE
+                oLamp_Indication := true; oLamp_Fault := false;
+            END_IF;
+            IF NOT iDHS THEN    
+                IF iProx_Stop_Home AND NOT bProduct_Detected AND NOT bReceived_Correct THEN
+                    State := 1; // Goto ABLE TO RECEIVE PRODUCT
+                    bTS := false;
+                END_IF;
+            
+                IF bProduct_Detected OR bReceived_Correct THEN
+                    IF (iProx_Stop_Pos1 AND ((xSend_Pos = 2) OR (xSend_Pos = 3) OR (xSend_Pos = 4)))
+                    OR ((xSend_Pos = 1) AND iProx_Stop_Home AND NOT iProx_Stop_Pos1 AND NOT iProx_Stop_Pos2)
+                    OR (iProx_Stop_Pos2 AND (xSend_Pos = 5)) THEN
+                        State := 8; // Goto ABLE TO SEND PRODUCT
+                        bTS := false;
+                    END_IF;
+                END_IF;
+                
+                IF iButton_Call THEN
+                    State := 54;
+                    bTS := false;
+                END_IF;
+            END_IF;
+    6   :   IF NOT bTS THEN                         // POSITION CONV TO SEND
+                tTimer(IN := false);
+                oMotor_Aux1_Fwd := true;
+                oMotor_Aux1_Rev := false;
+                oMotor_Aux1_Fast := true;
+                oLamp_Warning := true;
+                bTS := true;
+            END_IF;
+            
+            tTimer(IN := true, PT := t#25s);
+            
+            IF (xSend_Pos = 5) THEN
+                IF iProx_Slow_Pos2 THEN
+                    oMotor_Aux1_Fast := false;
+                END_IF;
+            
+                IF iProx_Stop_Pos2 THEN
+                    oMotor_Aux1_Fwd := false;
+                    State := 8;
+                    bTS := false;
+                END_IF;
+            ELSE
+                IF iProx_Slow_Pos1 THEN
+                    oMotor_Aux1_Fast := false;
+                END_IF;
+            
+                IF iProx_Stop_Pos1 THEN
+                    oMotor_Aux1_Fwd := false;
+                    State := 8;
+                    bTS := false;
+                END_IF;
+            END_IF;
+            
+            IF (xSend_Pos = 1) THEN
+                State := 7;
+                bTS := false;
+            END_IF;
+            
+            IF tTimer.Q THEN
+                State := 18;
+                bTS := false;
+            END_IF;
+            ;
+    7   :   IF NOT bTS THEN                         // POSITION CONV TO RECEIVE
+                tTimer(IN := false);
+                oMotor_Rollers_Fwd := false;
+                oMotor_Rollers_Rev := false;
+                oMotor_Aux1_Fwd := false;
+                oMotor_Aux1_Rev := true;
+                oMotor_Aux1_Fast := true;
+                oMotor_Aux2_Fwd := false;
+                oLamp_Warning := true;
+                bTS := true;
+            END_IF;
+            
+            tTimer(IN := true, PT := t#25s);
+            
+            IF iProx_Slow_Home THEN
+                oMotor_Aux1_Fast := false;
+            END_IF;
+            
+            IF iProx_Stop_Home THEN
+                oMotor_Aux1_Rev := false;
+                State := 53;
+                bTS := false;
+            END_IF;
+            
+            IF tTimer.Q THEN
+                State := 18;
+                bTS := false;
+            END_IF;
+            ;
+    8   :   IF NOT bTS THEN                         // ABLE TO SEND
+                tTimer(IN := false);
+                oLamp_Indication := true;(*
+                IF (xConv_Behav = 2) THEN
+                    oLamp_Warning := true;
+                ELSE
+                    oLamp_Warning := false;
+                END_IF;*)
+                oLamp_Fault := false;
+                oAble_to_Part := true;
+                oReady_to_Part := FALSE;
+                bProduct_Lost := false;
+                dLight_State := 0;
+                bTS := true;
+            END_IF;
+            IF iDHS THEN
+                State := 5; // Goto POSITION CONV WITH DHS
+                bTS := false;
+            ELSIF (xConv_Behav = 0) AND iButton_Index THEN
+                State := 9; // Goto REQUEST TO SEND
+                bTS := false;
+            ELSIF (xConv_Behav = 1) THEN
+                State := 9; // Goto REQUEST TO SEND
+                bTS := false;
+            ELSIF (xConv_Behav = 2) THEN
+                IF xCycle_Running THEN
+                    IF (iNeigh_0 = 3) AND NOT xSegment_Startpoint AND (xSend_Pos = 1) THEN
+                        State := 50;
+                        bTS := false;
+                    ELSIF iInit_Send THEN
+                        State := 9; // Goto REQUEST TO SEND
+                        bTS := false;
+                    ELSIF (iButton_Index OR xFixed_Cycle_Mode) THEN
+                        oReady_to_Part := true;
+                    END_IF;
+                    oLamp_Warning := NOT oReady_to_Part;
+                    IF xSiren THEN
+                        oLamp_Indication := bTicker; oLamp_Warning := bTicker; oLamp_Fault := bTicker;
+                    ELSE
+                        oLamp_Indication := true; oLamp_Fault := false;
+                    END_IF;
+                ELSE
+                    tTimer(IN := true, PT := t#0.5s);
+                    IF tTimer.Q THEN
+                        tTimer(IN:=false);
+                        dLight_State := (dLight_State+1) MOD 4;
+                    END_IF;
+                    oLamp_Indication := false; oLamp_Warning := false; oLamp_Fault := false;
+                    CASE dLight_State OF
+                        0 : oLamp_Indication := true;
+                        1 : oLamp_Warning := true;
+                        2 : oLamp_Fault := true;
+                        3 : oLamp_Warning := true;
+                    END_CASE;
+                    oReady_to_Part := false;
+                END_IF;
+
+            END_IF;
+            IF NOT bProduct_Detected THEN
+                IF bReceived_Correct THEN
+                    bProduct_Lost := true;
+                ELSE
+                    State := 0; // Goto RESET
+                END_IF;
+                bTS := false;
+            ELSE
+                bProduct_Lost := false;
+            END_IF;
+            
+            ;
+    9   :   IF NOT bTS THEN                         // REQUEST TO SEND PRODUCT
+                IF (xSend_Pos = 1) THEN
+                    oNeigh_1 := 3;
+                ELSIF (xSend_Pos = 2) OR (xSend_Pos = 3) OR (xSend_Pos = 4) THEN
+                    oNeigh_2 := 3;
+                ELSIF (xSend_Pos = 5) THEN
+                    oNeigh_3 := 3;
+                END_IF;
+                oLamp_Warning := false;
+                tTimer(IN := false);
+                oAble_to_Part := false;
+                bTS := true;
+            END_IF;
+            
+            tTimer(IN := true, PT := t#3s);
+            
+            IF (xSend_Pos = 1) AND (iNeigh_1 = 2) THEN
+                State := 11;    // Goto SENDING PRODUCT
+                bTS := false;   
+            ELSIF ((xSend_Pos = 2) OR (xSend_Pos = 3) OR (xSend_Pos = 4)) AND (iNeigh_2 = 2) THEN
+                State := 11;    // Goto SENDING PRODUCT
+                bTS := false;
+            ELSIF (xSend_Pos = 5) AND (iNeigh_3 = 2) THEN
+                State := 11;    // Goto SENDING PRODUCT
+                bTS := false;         
+            ELSIF tTimer.Q THEN
+                State := 10;    // Goto NEXT CONV BUSY
+                bTS := false;
+            END_IF;
+            ;
+    10  :   IF NOT bTS THEN                         // NEXT CONV BUSY
+                tTimer(IN := false);
+                oNeigh_1 := 0;
+                oNeigh_2 := 0;
+                oNeigh_3 := 0;
+                bTS := true;
+            END_IF;
+            
+            IF (xConv_Behav = 1) THEN
+                tTimer(IN := true, PT := t#10s);
+                oLamp_Indication := false;
+                oLamp_Warning := true;
+                
+                IF (xSend_Pos = 1) AND (iNeigh_1 = 1) THEN
+                    State := 9; // Goto REQUEST TO SEND PRODUCT
+                    bTS := false;
+                ELSIF (xSend_Pos = 2) AND (iNeigh_2 = 1) THEN
+                    State := 9; // Goto REQUEST TO SEND PRODUCT
+                    bTS := false;
+                END_IF;
+            ELSIF (xConv_Behav = 0) THEN
+                tTimer(IN := true, PT := t#1s);
+                oLamp_Indication := false;
+                oLamp_Fault := true;
+            END_IF;
+            
+            IF tTimer.Q THEN
+                State := 8; // Goto ABLE TO SEND
+                bTS := false;
+            ELSIF bProduct_Detected THEN
+                State := 0;
+                bTS := false;
+            END_IF;
+            ;
+    11  :   IF NOT bTS THEN                         // SENDING PRODUCT
+                IF (xSend_Pos < 3) THEN
+                    oMotor_Rollers_Fwd := true;
+                    oMotor_Rollers_Rev := false;
+                    IF (xSend_Pos = 1) AND (xConv_Behav = 1) THEN
+                        oNeigh_0 := 1;
+                    END_IF;
+                ELSIF (xSend_Pos = 3) OR (xSend_Pos = 5) THEN
+                    oMotor_Rollers_Fwd := false;
+                    oMotor_Rollers_Rev := true;
+                ELSIF (xSend_Pos = 4) THEN
+                    oMotor_Aux2_Fwd := true;
+                END_IF;
+                tTimer(IN := false);
+                IF (xSend_Pos = 1) THEN
+                    oNeigh_1 := 5;
+                ELSIF (xSend_Pos = 2) OR (xSend_Pos = 3) OR (xSend_Pos = 4) THEN
+                    oNeigh_2 := 5;
+                ELSIF (xSend_Pos = 5) THEN
+                    oNeigh_3 := 5;
+                END_IF;
+                oLamp_Warning := true;
+                bProduct_Send_Success := false;
+                bReceived_Correct := false;
+                bTS := true;
+            END_IF;
+            
+            tTimer(IN := true, PT := TO_Send);
+            
+            IF bProduct_Lost THEN
+                tTimer2(IN := true, PT := t#2s);
+                IF NOT bProduct_Detected AND tTimer2.Q THEN
+                    State := 12;    // Goto FINISH SENDING
+                    bTS := false;
+                END_IF;
+            ELSIF NOT bProduct_Detected THEN
+                State := 12;    // Goto FINISH SENDING
+                bTS := false;
+            END_IF;
+            
+            IF ((iNeigh_1 = 10) AND (xSend_Pos = 1)) OR ((iNeigh_2 = 10) AND (xSend_Pos = 2)) THEN
+                State := 17;    // Goto ERROR: SEND
+                bTS := false;
+            ELSIF (xSend_Pos = 1) AND (xConv_Behav = 1) AND (iNeigh_0 = 3) THEN
+                State := 13;    // Goto RECEIVE WHILE SENDING
+                bTS := false;
+            ELSIF tTimer.Q THEN
+                State := 17;    // Goto ERROR: SEND
+                bTS := false;
+            END_IF;
+            ;
+    12  :   IF NOT bTS THEN                         // FINISH SENDING
+                tTimer(IN := false);
+                IF (xSend_Pos = 1) THEN
+                    oNeigh_1 := 4;
+                ELSIF (xSend_Pos = 2) OR (xSend_Pos = 3) OR (xSend_Pos = 4) THEN
+                    oNeigh_2 := 4;
+                ELSIF (xSend_Pos = 5) THEN
+                    oNeigh_3 := 4;
+                END_IF;
+                boldPS1 := false;
+                bTS := true;
+            END_IF;
+            
+            IF NOT xProxy_replace THEN
+                tTimer(IN := true, PT := DEL_SendClear);
+            ELSE
+                tTimer(IN := true, PT := DEL_SendClear + T#5s);
+            END_IF;
+            IF NOT iPS1 AND boldPS1 THEN
+                bProduct_Send_Success := true;
+            END_IF;
+            boldPS1 := iPS1;
+            IF (xSend_Pos = 1 AND iNeigh_1 = 6) OR (xSend_Pos > 1 AND (iNeigh_2 = 6 OR iNeigh_3 = 6)) THEN
+                bProduct_Send_Success := true;
+            END_IF;
+            IF tTimer.Q OR bProduct_Send_Success THEN
+                IF (xSend_Pos = 1) THEN
+                    State := 1; // Goto ABLE TO RECEIVE
+                ELSIF (xConv_Behav = 1) OR (xConv_Behav = 2) THEN
+                    //State := 7; // Goto POSITION CONV TO HOME
+                    State := 55;
+                ELSE
+                    State := 5; // Goto POSITION CONV WITH DHS
+                END_IF;
+                bTS := false;
+            ELSIF ((iNeigh_1 = 10) AND (xSend_Pos = 1)) OR ((iNeigh_2 = 10) AND (xSend_Pos = 2)) THEN
+                State := 17;    // Goto ERROR: SEND
+                bTS := false;
+            ELSIF (xSend_Pos = 1) AND (xConv_Behav = 1) AND (iNeigh_0 = 3) THEN
+                State := 2;    // Goto RECEIVING
+                bTS := false;
+            ELSIF (xSend_Pos = 1) AND (xConv_Behav = 2) AND xSegment_Startpoint AND (iNeigh_0 = 3) THEN
+                State := 2;    // Goto RECEIVING
+                bTS := false;
+            END_IF;
+            ;
+    13  :   IF NOT bTS THEN                         // RECEIVE WHILE SENDING
+                oNeigh_0 := 2;
+                oNeigh_1 := 5;
+                bReceived_Correct := false;
+                oMotor_Rollers_Fwd := true;
+                oMotor_Rollers_Rev := false;
+                oLamp_Warning := true;
+                bTS := true;
+            END_IF;
+            (*
+            IF NOT bProduct_Detected THEN
+                State := 52; // Goto RECEIVE WHILE SENDING finish
+                bTS := false;
+            ELS*)
+            
+            IF bProduct_Lost THEN
+                tTimer2(IN := true, PT := t#2s);
+                IF NOT bProduct_Detected AND tTimer2.Q THEN
+                    State := 52;    // Goto FINISH SENDING
+                    bTS := false;
+                END_IF;
+            ELSIF NOT bProduct_Detected THEN
+                State := 52;    // Goto FINISH SENDING
+                bTS := false;
+            END_IF;
+            
+            IF (iNeigh_0 = 5) THEN
+                oNeigh_0 := 0;
+            ELSIF (iNeigh_0 = 10) OR (iNeigh_1 = 10) THEN
+                State := 0; // Goto RESET
+                bTS := false;
+            END_IF;
+            ;
+    14  :   IF NOT bTS THEN                         // MANUAL MODE
+                oMotor_Rollers_Fwd := false;
+                oMotor_Rollers_Rev := false;
+                oMotor_Aux1_Fwd := false;
+                oMotor_Aux1_Rev := false;
+                oMotor_Aux1_Fast := false;
+                oMotor_Aux2_Fwd := false;
+                oMotor_Aux2_Rev := false;
+                oMotor_Aux2_Fast := false;
+                oLamp_Indication := true;
+                oLamp_Warning := false;
+                oLamp_Fault := true;
+                
+                oNeigh_0 := 0;
+                oNeigh_1 := 0;
+                oNeigh_2 := 0;
+                oNeigh_3 := 0;
+                
+                bManual_Field_Buttons := false;
+                bManaul_HMI_Fwd := false;
+                bManaul_HMI_Rev := false;
+                bManaul_HMI_Aux2_Fwd := false;
+                bManaul_HMI_Aux2_Rev := false;
+                bTS := true;
+            END_IF;
+            
+            IF NOT (iButton_Index OR iButton_Call) THEN
+                bManual_Field_Buttons := true;
+            END_IF;
+            
+            IF oMotor_Rollers_Fwd AND NOT bOld_Fwd THEN
+                bManaul_HMI_Fwd := true;
+            ELSIF bOld_Fwd AND NOT oMotor_Rollers_Fwd THEN
+                bManaul_HMI_Fwd := false;
+            END_IF;
+            IF oMotor_Rollers_Rev AND NOT bOld_Rev THEN
+                bManaul_HMI_Rev := true;
+            ELSIF bOld_Rev AND NOT oMotor_Rollers_Rev THEN
+                bManaul_HMI_Rev := false;
+            END_IF;
+            
+            IF oMotor_Aux2_Fwd AND NOT bOld_Aux2_Fwd THEN
+                bManaul_HMI_Aux2_Fwd := true;
+            ELSIF bOld_Aux2_Fwd AND NOT oMotor_Aux2_Fwd THEN
+                bManaul_HMI_Aux2_Fwd := false;
+            END_IF;
+            IF oMotor_Aux2_Rev AND NOT bOld_Aux2_Rev THEN
+                bManaul_HMI_Aux2_Rev := true;
+            ELSIF bOld_Aux2_Rev AND NOT oMotor_Aux2_Rev THEN
+                bManaul_HMI_Aux2_Rev := false;
+            END_IF;
+            
+            bManual_Btn_Fwd := iButton_Index AND bManual_Field_Buttons;
+            oMotor_Rollers_Fwd := bManaul_HMI_Fwd OR bManual_Btn_Fwd;
+            oMotor_Aux2_Fwd := bManaul_HMI_Aux2_Fwd OR bManual_Btn_Fwd;
+            
+            bManual_Btn_Rev := iButton_Call AND bManual_Field_Buttons;
+            oMotor_Rollers_Rev := bManaul_HMI_Rev OR bManual_Btn_Rev;
+            oMotor_Aux2_Rev := bManaul_HMI_Aux2_Rev OR bManual_Btn_Rev;
+            
+            
+            bOld_Fwd := oMotor_Rollers_Fwd;
+            bOld_Rev := oMotor_Rollers_Rev;
+            bOld_Aux2_Fwd := oMotor_Aux2_Fwd;
+            bOld_Aux2_Rev := oMotor_Aux2_Rev;
+            
+            IF NOT iManual_Mode_Req THEN
+                State := 0; // Goto RESET
+                bTS := false;
+            END_IF;
+            ;
+    15  :   IF NOT bTS THEN                         // HALT CONV
+                oMotor_Rollers_Fwd := false;
+                oMotor_Rollers_Rev := false;
+                oMotor_Aux1_Fwd := false;
+                oMotor_Aux1_Rev := false;
+                oMotor_Aux1_Fast := false;
+                oMotor_Aux2_Fwd := false;
+                oMotor_Aux2_Rev := false;
+                oMotor_Aux2_Fast := false;
+                oLamp_Indication := false;
+                oLamp_Warning := false;
+                oLamp_Fault := true;
+                oNeigh_0 := 0;
+                oNeigh_1 := 0;
+                oNeigh_2 := 0;
+                oNeigh_3 := 0;
+                bTS := true;
+            END_IF;
+            
+            IF NOT (iEStop OR iVSD_Fault_Rollers OR iVSD_Fault_Aux1 OR iVSD_Fault_Aux2) THEN
+                State := 0; // Goto RESET
+                bTS := false;
+            END_IF;
+            ;
+    16  :   IF NOT bTS THEN                         // ERROR: RECEIVING PRODUCT
+                oMotor_Rollers_Fwd := false;
+                oAlarm_Receive := true;
+                oLamp_Indication := false;
+                oLamp_Fault := true;
+                tTimer(IN := false);
+                oNeigh_0 := 10;
+                bTS := true;
+            END_IF;
+            
+            tTimer(IN := true, PT := t#1s);
+            
+            IF (xAuto_Reset AND tTimer.Q) OR iButton_Index THEN
+                State := 0; // Goto RESET
+                bTS := false;
+            END_IF;
+            ;
+    17  :   IF NOT bTS THEN                         // ERROR: SENDING PRODUCT
+                oMotor_Rollers_Fwd := false;
+                oMotor_Rollers_Rev := false;
+                oAlarm_Send := true;
+                oMotor_Aux2_Fwd := false;
+                oLamp_Indication := false;
+                oLamp_Fault := true;
+                tTimer(IN := false);
+                bTS := true;
+            END_IF;
+            
+            tTimer(IN := true, PT := t#1s);
+            
+            IF (xAuto_Reset AND tTimer.Q) OR iButton_Index THEN
+                State := 0; // Goto RESET
+                bTS := false;
+            END_IF;
+            ;
+    18  :   IF NOT bTS THEN                         // ERROR: POSITIONING CONV
+                tTimer(IN := false);
+                oMotor_Aux1_Fwd := false;
+                oMotor_Aux1_Rev := false;
+                oLamp_Indication := false;
+                oLamp_Fault := true;
+                bTS := true;
+            END_IF;
+            
+            tTimer(IN := true, PT := t#1s);
+            
+            IF (xAuto_Reset AND tTimer.Q) OR iButton_Index THEN
+                State := 0; // Goto RESET
+                bTS := false;
+            END_IF;
+            ;
+    50  :   IF NOT bTS THEN                 // request to next conv in cycle mode
+                oNeigh_1 := 3;
+                oAble_to_Part := false;
+                bTS := true;
+            END_IF;
+            
+            IF (iNeigh_1 = 2) THEN
+                State := 13;
+                bTS := false;
+            END_IF;
+            ;
+    51  :   IF NOT bTS THEN
+                tTimer(IN := false);
+                tShopware_Pulse(IN := false);
+                oLamp_Warning := true;
+                bTS := true;
+            END_IF;
+            
+            tTimer(IN := true, PT := t#3s);
+            tShopware_Pulse(IN := true, PT := t#1s);
+            oShopware_Pulse := tShopware_Pulse.Q;
+            
+            IF tTimer.Q THEN
+                State := 1;
+                oShopware_Pulse := false;
+                bTS := false;
+            END_IF;
+            ;
+    52  :   IF NOT bTS THEN                         // RECEIVE WHILE SENDING finish
+                tTimer(IN := false);
+                IF (xSend_Pos = 1) THEN
+                    oNeigh_1 := 4;
+                END_IF;
+                oMotor_Rollers_Fwd := true;
+                oMotor_Rollers_Rev := false;
+                oLamp_Warning := true;
+                bProduct_Unexpected := true;
+                bTS := true;
+            END_IF;
+            
+            IF (iNeigh_0 = 4) THEN
+                bProduct_Unexpected := false;
+            END_IF;
+            
+            IF bProduct_Detected THEN
+                IF bProduct_Unexpected THEN
+                    State := 16;    // Goto ERROR: RECEIVING PRODUCT
+                ELSE
+                    State := 3; // Goto RECEIVED PRODUCT
+                END_IF;
+                bTS := false;
+            ELSIF (iNeigh_0 = 5) THEN
+                oNeigh_0 := 0;
+            END_IF;
+            ;
+    53  :   IF NOT bTS THEN                         //delay after rotation bact to home
+                tTimer(IN := false);
+                bTS := true;
+            END_IF;
+            tTimer(IN := true, PT := t#100ms);
+            IF tTimer.Q THEN
+                State := 1;
+                bTS := false;
+            END_IF;
+            ;
+    54  :   IF NOT bTS THEN
+                tTimer(IN := false);
+                oMotor_Rollers_Fwd := false;
+                oMotor_Rollers_Rev := false;
+                oMotor_Aux1_Fwd := false;
+                oMotor_Aux1_Rev := true;
+                oMotor_Aux1_Fast := true;
+                oMotor_Aux2_Fwd := false;
+                oLamp_Warning := true;
+                bTS := true;
+            END_IF;
+            
+            tTimer(IN := true, PT := t#25s);
+            
+            IF iProx_Slow_Home THEN
+                oMotor_Aux1_Fast := false;
+            END_IF;
+            
+            IF iProx_Stop_Home THEN
+                oMotor_Aux1_Rev := false;
+                IF bReceived_Correct THEN
+                    IF xSend_Pos = 1 THEN
+                        State := 8;
+                    ELSE
+                        State := 3;
+                    END_IF;
+                    bTS := false;
+                ELSIF NOT bProduct_Detected THEN
+                    State := 1;
+                    bTS := false;
+                END_IF;
+                
+            END_IF;
+            
+            IF tTimer.Q THEN
+                State := 18;
+                bTS := false;
+            END_IF;
+            ;
+    55  :   IF NOT bTS THEN                         // Roller device must confirm if block left
+                oMotor_Rollers_Fwd := false;
+                oMotor_Rollers_Rev := false;
+                oMotor_Aux1_Fwd := false;
+                oMotor_Aux1_Rev := false;
+                oMotor_Aux1_Fast := false;
+                oMotor_Aux2_Fwd := false;
+                oLamp_Warning := true;
+                bTS := true;
+            END_IF;
+            
+            IF iNeigh_2 = 6 THEN
+                bProduct_Send_Success := true;
+            END_IF;
+            
+            IF iButton_Index OR bProduct_Send_Success OR (xSend_Pos = 3 AND NOT tPS1_Debounce.Q) THEN
+                State := 7; // Goto POSITION CONV TO HOME
+                bTS := false;
+            END_IF;  
+    ELSE:   ;
+END_CASE;
+
+IF (xConv_Behav = 2) AND NOT oAble_to_Part THEN
+    oReady_to_Part := false;
+    //oLamp_Warning := true;
+END_IF;
+
+IF NOT (xConv_Behav = Settings_old) THEN
+    State := 0;
+    bTS := false;
+END_IF;
+Settings_old := xConv_Behav;
+(*
+IF xConv_Behav = 2 THEN
+    IF bStarted_Working THEN
+        tTimer_WorkTime(IN := true, PT := t#1d);
+    END_IF;
+    IF bStoppedWorking THEN
+        tTimer_WorkTime(IN := false);
+*)
+END_FUNCTION_BLOCK
